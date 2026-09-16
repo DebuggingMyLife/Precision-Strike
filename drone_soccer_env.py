@@ -14,6 +14,7 @@ The observation pipeline is already wired up:
 During training use p.DIRECT (headless, fast). Switch to p.GUI only when you
 want to watch an episode locally.
 """
+#testing josh git push
 
 import numpy as np
 import pybullet as p
