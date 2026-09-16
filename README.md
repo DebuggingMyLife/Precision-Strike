@@ -10,6 +10,21 @@ RecurrentPPO training script.
 pip install -r requirements.txt
 ```
 
+**Windows note:** pybullet has no prebuilt Windows wheel on PyPI, so pip
+compiles it from source — this requires the
+[MSVC Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+(C++ workload) to be installed first, and can take 30-60+ minutes.
+
+**GPU training:** `pip install -r requirements.txt` installs the CPU-only
+build of torch on Windows (PyPI's default Windows wheel has no CUDA, unlike
+Linux). For GPU training, reinstall torch from PyTorch's CUDA index after:
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130 --force-reinstall
+```
+
+Check it worked with `python -c "import torch; print(torch.cuda.is_available())"`.
+
 ## Files
 
 - **drone_soccer_env.py** — the environment. Run it directly for a quick
