@@ -1,0 +1,31 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Training artifacts
+*.zip
+*.pth
+*.pt
+*.ckpt
+logs/
+runs/
+checkpoints/
+models/
+tensorboard/
+
+# Ultralytics
+yolo*.pt
+*.onnx
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
