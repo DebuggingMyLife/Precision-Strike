@@ -35,14 +35,25 @@ from gymnasium import spaces
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 DRONE_URDF = os.path.join(ASSETS_DIR, "cf2x.urdf")
 
-# Bitcraze Crazyflie 2.X physical constants, read from cf2x.urdf's <properties>
-# tag (vendored from github.com/learnsyslab/gym-pybullet-drones, see
-# assets/NOTICE.md). Mirrors that project's BaseAviary hover/thrust math.
-DRONE_MASS = 0.1  # kg
-DRONE_KF = 3.16e-10  # thrust coefficient, N / (rad/s)^2
-DRONE_KM = 7.94e-12  # torque coefficient, N*m / (rad/s)^2
-DRONE_THRUST2WEIGHT = 2.25
-GRAVITY_ACCEL = 9.8  # m/s^2
+# DJI Tello drone soccer specs (overrides the cf2x.urdf body's own mass/thrust
+# tags below, applied via changeDynamics in _load_scene). No real Tello URDF
+# on hand, so cf2x.urdf's geometry is kept as a stand-in body shape.
+DRONE_MASS = 0.105            # 80g Tello + 25g soccer cage
+DRONE_KF = 3.16e-10           # thrust coefficient, N / (rad/s)^2 (kept from URDF tag for RPM mixing)
+DRONE_KM = 7.94e-12           # torque coefficient, N*m / (rad/s)^2
+DRONE_THRUST2WEIGHT = 1.7     # Tello has a tight ~1.7:1 TWR ratio (not the cf2x's 2.25)
+GRAVITY_ACCEL = 9.81  # m/s^2
+
+# cf2x.urdf's own base_link <inertial> tag: mass=0.027kg,
+# ixx=iyy=1.4e-5, izz=2.17e-5 (kg*m^2). changeDynamics only overrides mass
+# below, not inertia, so without rescaling, the sim would keep a 27g-sized
+# inertia tensor on a 105g body — unrealistically easy to tilt/spin for its
+# mass. Scale linearly with the mass ratio (same assumed body geometry/
+# radius of gyration, just heavier).
+_CF2X_BASE_MASS = 0.027
+_CF2X_BASE_INERTIA = (1.4e-5, 1.4e-5, 2.17e-5)  # ixx, iyy, izz
+_INERTIA_SCALE = DRONE_MASS / _CF2X_BASE_MASS
+DRONE_INERTIA = tuple(i * _INERTIA_SCALE for i in _CF2X_BASE_INERTIA)
 
 _GRAVITY_FORCE = GRAVITY_ACCEL * DRONE_MASS
 HOVER_RPM = (_GRAVITY_FORCE / (4 * DRONE_KF)) ** 0.5
@@ -51,9 +62,75 @@ MAX_RPM = (DRONE_THRUST2WEIGHT * _GRAVITY_FORCE / (4 * DRONE_KF)) ** 0.5
 SCORE_REWARD = 50.0
 CRASH_PENALTY = -50.0
 COLLISION_PENALTY = -20.0
+# Previously missing entirely: _check_done() ends the episode on "flipped"
+# (tilt past MAX_TILT_RAD) but _compute_reward() had no matching branch, so
+# a flip that didn't also touch the ground scored the same as any ordinary
+# step. That left the policy with no direct incentive to avoid tipping over
+# beyond the indirect cost of losing future progress reward — flip rate
+# stayed at 75-90% of terminations across training regardless. -30 sits
+# between COLLISION_PENALTY and CRASH_PENALTY: worse than bumping an
+# opponent, but a ground crash is still the least recoverable failure.
+FLIP_PENALTY = -30.0
+# Missing is a worse *shot*, not a worse *failure* — the drone still flew
+# the course successfully, it just didn't thread the hoop, so this stays
+# lighter than the failure-mode penalties above.
+MISS_PENALTY = -10.0
+
+# Potential-based shaping: reward the change in distance to the goal each
+# step, not the absolute distance. An absolute-distance penalty charges the
+# same cost per step regardless of progress, which makes ending the episode
+# early (e.g. tipping over on purpose) reward-optimal whenever the policy
+# can't reliably reach the goal. Rewarding the delta instead means standing
+# still costs ~0, not a growing negative total, removing that incentive.
+PROGRESS_SCALE = 10.0
+
+# Raw 3D distance-to-goal progress (above) rewards closing X-distance just as
+# much as centering on the hoop's Y-Z opening, so a drone can look like it's
+# "making progress" while drifting off-axis — and only find out it's
+# mis-aligned when it crosses the goal plane. missed_goal became the single
+# largest failure mode (52% of terminations) once FLIP_PENALTY/MISS_PENALTY
+# fixed the flip-tolerance problem, more common than flipping itself. This
+# adds dedicated potential-based shaping for lateral (Y-Z) alignment to the
+# hoop centre, same style as PROGRESS_SCALE, but only once the drone is on
+# final approach — applying it for the whole flight would fight the
+# goalkeeper-avoidance detours needed earlier in the field.
+LATERAL_SCALE = 10.0
+FINAL_APPROACH_X = 2.0  # last third of the 0-3m field, past most dodging
+
+# Fraction of the full throttle RPM range given to roll/pitch/yaw (see
+# _apply_action). At 1.0, three simultaneous max-deflection axes could sum
+# to +/-3x rpm_range before clipping — very easy to snap-roll past the tilt
+# threshold before the policy can level out. Cutting this down makes the
+# drone less twitchy so it has a real chance to recover instead of flipping
+# every attempt.
+ATTITUDE_GAIN = 0.4
+
+# Tilt angle (radians) past which the drone is considered unrecoverable and
+# the episode ends. Loosened twice now: 1.05 rad (~60 deg) originally, then
+# 1.4 rad (~80 deg), now 1.5 rad (~86 deg) — nearly on its side — for even
+# more room to recover before giving up on it.
+MAX_TILT_RAD = 1.5  # ~86 degrees
+
+# 3x3m field: X runs from the spawn line to the goal plane (see goal_pos in
+# _load_scene), Y is centred on the spawn/goal line. Flying outside this
+# footprint ends the episode (see _check_done) rather than being physically
+# walled off.
+FIELD_X_MIN = 0.0
+FIELD_Y_HALF = 1.5
+
+# Total opponents on the field, including the goalkeeper: opponent 0 always
+# patrols in front of the hoop (unchanged); the rest fly randomly around the
+# field as extra obstacles.
+N_OPPONENTS = 4
+RANDOM_OPPONENT_SPEED = 0.02  # metres moved per env step toward its current waypoint
+# Random fliers stay inset from the true field edges so they don't spend all
+# their time clipped against a boundary they just re-targeted past.
+_RANDOM_OPPONENT_X_RANGE = (FIELD_X_MIN + 0.3, 2.7)
+_RANDOM_OPPONENT_Y_RANGE = (-(FIELD_Y_HALF - 0.2), FIELD_Y_HALF - 0.2)
 
 
 class DroneSoccerEnv(gym.Env):
+    TIME_PENALTY = -0.02  # per-step cost, pushes the policy toward scoring quickly
     metadata = {"render_modes": ["human", None]}
 
     def __init__(self, detector=None, render_mode=None, img_size=84):
@@ -66,26 +143,44 @@ class DroneSoccerEnv(gym.Env):
         p.setAdditionalSearchPath(
             pybullet_data.getDataPath(), physicsClientId=self._client
         )
+        self._configure_physics()
 
         # --- Observation space ---
         # [drone pos(3), drone vel(3), drone orientation(4 quat)] = 10
-        # + [opponent_detected(1), rel_x(1), rel_y(1), distance(1)] = 4
-        # Adjust as your feature encoding grows (e.g. add velocity of opponent).
-        obs_dim = 10 + 4
+        # + N_OPPONENTS * [opponent_detected(1), rel_x(1), rel_y(1), distance(1)]
+        # one block per opponent, in self.opponent_ids order (goalkeeper
+        # first, then the random fliers) — a fixed order so the observation
+        # shape/layout stays consistent across episodes even though the
+        # opponents' actual positions change.
+        obs_dim = 10 + 4 * N_OPPONENTS
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
 
         # --- Action space ---
-        # 4 continuous commands: [roll, pitch, throttle, yaw] velocities normalized to [-1, 1]
+        # 4 continuous commands: [roll, pitch, throttle, yaw] normalized to [-1, 1]
         self.action_space = spaces.Box(
             low=-1.0, high=1.0, shape=(4,), dtype=np.float32
         )
 
         self.drone_id = None
-        self.opponent_id = None
+        self.opponent_ids = []
         self.step_count = 0
         self.max_steps = 1000
+
+    def _configure_physics(self):
+        """240Hz stepping + solver/velocity limits tuned for the Tello body.
+
+        resetSimulation() drops engine-level parameters back to their
+        defaults, so this needs to be called again after every reset, not
+        just once in __init__.
+        """
+        p.setTimeStep(1.0 / 240.0, physicsClientId=self._client)
+        p.setPhysicsEngineParameter(
+            numSolverIterations=100,   # high precision contact constraints
+            contactBreakingThreshold=0.005,
+            physicsClientId=self._client,
+        )
 
     # ------------------------------------------------------------------ #
     # Gymnasium API
@@ -94,10 +189,21 @@ class DroneSoccerEnv(gym.Env):
         super().reset(seed=seed)
         p.resetSimulation(physicsClientId=self._client)
         p.setGravity(0, 0, -GRAVITY_ACCEL, physicsClientId=self._client)
+        self._configure_physics()
         self.plane_id = p.loadURDF("plane.urdf", physicsClientId=self._client)
 
         self._load_scene()
         self.step_count = 0
+
+        drone_pos, _ = p.getBasePositionAndOrientation(
+            self.drone_id, physicsClientId=self._client
+        )
+        self._prev_dist_to_goal = np.linalg.norm(
+            np.array(drone_pos) - np.array(self.goal_pos)
+        )
+        self._prev_lateral_dist = np.linalg.norm(
+            np.array(drone_pos[1:]) - np.array(self.goal_pos[1:])
+        )
 
         obs = self._get_obs()
         info = {}
@@ -105,41 +211,135 @@ class DroneSoccerEnv(gym.Env):
 
     def step(self, action):
         self._apply_action(action)
+        self._update_opponents()
         p.stepSimulation(physicsClientId=self._client)
         self.step_count += 1
 
         obs = self._get_obs()
-        reward = self._compute_reward()
-        terminated = self._check_done()
+        # Computed once and handed to _compute_reward() rather than each
+        # deriving crash/scored independently — both used to check
+        # drone_pos[2] < 0.05 and _scored() separately, which was redundant
+        # and, worse, meant _compute_reward() couldn't see the "flipped"
+        # outcome that only _check_done() knew about.
+        termination_reason = self._check_done()
+        reward = self._compute_reward(termination_reason)
+        terminated = termination_reason is not None
         truncated = self.step_count >= self.max_steps
-        info = {}
+        if terminated:
+            info = {"termination_reason": termination_reason}
+        elif truncated:
+            info = {"termination_reason": "max_steps"}
+        else:
+            info = {}
 
         return obs, reward, terminated, truncated, info
 
     def close(self):
         p.disconnect(physicsClientId=self._client)
 
+    def show_termination_text(self, text, pause=1.5):
+        """Overlay `text` above the drone in the GUI window and pause briefly
+        so it's readable — resetSimulation() (called by reset()) wipes all
+        debug items immediately, so without the pause the text would vanish
+        the instant the caller resets. No-op outside render_mode="human"
+        since addUserDebugText has no effect in DIRECT mode.
+        """
+        if self.render_mode != "human":
+            return
+        drone_pos, _ = p.getBasePositionAndOrientation(
+            self.drone_id, physicsClientId=self._client
+        )
+        p.addUserDebugText(
+            text, [drone_pos[0], drone_pos[1], drone_pos[2] + 0.3],
+            textColorRGB=[1, 0.2, 0.2], textSize=1.8,
+            physicsClientId=self._client,
+        )
+        time.sleep(pause)
+
     # ------------------------------------------------------------------ #
     # Scene / action / reward — fill these in for your specific task
     # ------------------------------------------------------------------ #
     def _load_scene(self):
         """Load drone, opponent drone, goal, field boundaries."""
-        # Crazyflie 2.X quadrotor for both your drone and the opponent.
-        # TODO: add field boundary geometry.
-        start_pos = [0, 0, 1]
+        # Crazyflie 2.X body for both drones, re-tuned to Tello mass/handling
+        # via changeDynamics below (no Tello URDF on hand, so this is the
+        # closest stand-in geometry).
+        # Spawn with a small margin off the FIELD_X_MIN line — sitting
+        # exactly on the boundary means sub-millimetre physics noise (not
+        # real movement) can trip the out-of-bounds check on step 1.
+        start_pos = [FIELD_X_MIN + 0.1, 0, 1]
         self.drone_id = p.loadURDF(
             DRONE_URDF, start_pos, physicsClientId=self._client
         )
-
-        opponent_pos = [2, 0, 1]
-        self.opponent_id = p.loadURDF(
-            DRONE_URDF, opponent_pos, physicsClientId=self._client
+        p.changeDynamics(
+            self.drone_id, linkIndex=-1,
+            mass=DRONE_MASS,
+            localInertiaDiagonal=DRONE_INERTIA,
+            restitution=0.8,        # springy drone-soccer cage bounce
+            lateralFriction=0.1,    # don't lock up against opponent frames
+            linearDamping=0.6,      # mimics Tello's VPS/optical-flow hold
+            angularDamping=0.8,
+            physicsClientId=self._client,
         )
 
         # Goal: a red hoop to fly through, facing down the field's X axis.
         self.goal_pos = [3, 0, 1]
-        self.goal_radius = 0.5
+        self.goal_radius = 0.25
         self.goal_ids = self._create_hoop(self.goal_pos, radius=self.goal_radius)
+
+        # Opponent 0 patrols left/right just in front of the hoop, like a
+        # goalkeeper, blocking the striker's approach. opponent_ids[0] is
+        # always this goalkeeper; the rest (see below) fly randomly.
+        self.opponent_x = self.goal_pos[0] - 0.3
+        self.opponent_z = 1.0
+        self.opponent_amplitude = 0.6  # metres either side of centre
+        self.opponent_angular_speed = 0.05  # radians per env step
+        opponent_pos = [self.opponent_x, 0, self.opponent_z]
+        goalkeeper_id = p.loadURDF(
+            DRONE_URDF, opponent_pos, physicsClientId=self._client
+        )
+        p.changeDynamics(
+            goalkeeper_id, linkIndex=-1,
+            mass=DRONE_MASS, localInertiaDiagonal=DRONE_INERTIA,
+            restitution=0.8, lateralFriction=0.1,
+            physicsClientId=self._client,
+        )
+        self.opponent_ids = [goalkeeper_id]
+
+        # Remaining opponents fly randomly around the field: each has its
+        # own random waypoint and steps toward it at a constant speed each
+        # frame, picking a new random waypoint on arrival (see
+        # _update_opponents). Kinematic, same as the goalkeeper — these are
+        # obstacles for the policy to learn around, not something trained.
+        self.random_opponents = []
+        for _ in range(N_OPPONENTS - 1):
+            x = self.np_random.uniform(*_RANDOM_OPPONENT_X_RANGE)
+            y = self.np_random.uniform(*_RANDOM_OPPONENT_Y_RANGE)
+            z = self.np_random.uniform(0.7, 1.3)
+            body_id = p.loadURDF(
+                DRONE_URDF, [x, y, z], physicsClientId=self._client
+            )
+            p.changeDynamics(
+                body_id, linkIndex=-1,
+                mass=DRONE_MASS, localInertiaDiagonal=DRONE_INERTIA,
+                restitution=0.8, lateralFriction=0.1,
+                physicsClientId=self._client,
+            )
+            self.opponent_ids.append(body_id)
+            self.random_opponents.append({
+                "pos": np.array([x, y, z], dtype=np.float64),
+                "target": self._random_opponent_waypoint(),
+            })
+
+        self._update_opponents()
+
+    def _random_opponent_waypoint(self):
+        """A random [x, y, z] target within the random fliers' fly zone."""
+        return np.array([
+            self.np_random.uniform(*_RANDOM_OPPONENT_X_RANGE),
+            self.np_random.uniform(*_RANDOM_OPPONENT_Y_RANGE),
+            self.np_random.uniform(0.7, 1.3),
+        ], dtype=np.float64)
 
     def _create_hoop(self, center, radius=0.5, tube_radius=0.03, segments=16,
                       rgba=(1, 0, 0, 1)):
@@ -183,90 +383,148 @@ class DroneSoccerEnv(gym.Env):
             )
             segment_ids.append(body_id)
         return segment_ids
-    
-    def _apply_action(self, action):
-        """Map normalized action [-1, 1]^4 to high-level Tello velocities.
-        
-        action[0] = Roll (Left/Right)
-        action[1] = Pitch (Forward/Backward)
-        action[2] = Throttle (Up/Down)
-        action[3] = Yaw (Rotation)
+
+    def _update_opponents(self):
+        """Kinematically move every opponent for this step: the goalkeeper
+        sweeps left/right in front of the hoop, the rest fly randomly.
+
+        Like `_apply_action`'s thrust override, this bypasses real physics
+        (gravity would otherwise just drop their mass to the floor) and
+        directly places each one every step, since these are scripted
+        obstacles rather than something the policy needs to learn.
         """
-        # Ensure the inputs are safe
-        action = np.clip(action, -1.0, 1.0)
-        
-        # Scale to realistic physical speeds in meters per second (m/s)
-        # and radians per second for rotation
-        max_linear_vel = 2.0   # Tello moves at roughly 2 m/s max
-        max_angular_vel = 1.5  # Comfortable turning speed
-        
-        # Map actions to direction vectors
-        # action[1] = Forward/Backward (X axis)
-        # action[0] = Left/Right (Y axis)
-        # action[2] = Up/Down (Z axis)
-        linear_velocity = [
-            action[1] * max_linear_vel, 
-            action[0] * max_linear_vel, 
-            action[2] * max_linear_vel
-        ]
-        
-        # action[3] = Turn clockwise/counter-clockwise around Z axis
-        angular_velocity = [0.0, 0.0, action[3] * max_angular_vel]
-        
-        # Directly override body physics to move the drone like a Tello autopilot
-        p.resetBaseVelocity(
-            self.drone_id, 
-            linearVelocity=linear_velocity, 
-            angularVelocity=angular_velocity,
-            physicsClientId=self._client
+        angle = self.step_count * self.opponent_angular_speed
+        y = self.opponent_amplitude * np.sin(angle)
+        goalkeeper_pos = [self.opponent_x, y, self.opponent_z]
+        self._place_opponent(self.opponent_ids[0], goalkeeper_pos)
+
+        for body_id, state in zip(self.opponent_ids[1:], self.random_opponents):
+            to_target = state["target"] - state["pos"]
+            dist = np.linalg.norm(to_target)
+            if dist <= RANDOM_OPPONENT_SPEED:
+                # Reached (or would overshoot) this waypoint — snap to it
+                # and head somewhere new next step.
+                state["pos"] = state["target"]
+                state["target"] = self._random_opponent_waypoint()
+            else:
+                state["pos"] = state["pos"] + to_target / dist * RANDOM_OPPONENT_SPEED
+            self._place_opponent(body_id, state["pos"])
+
+    def _place_opponent(self, body_id, position):
+        p.resetBasePositionAndOrientation(
+            body_id, position, [0, 0, 0, 1], physicsClientId=self._client
         )
-    def _compute_reward(self):
-        # 1. Extract drone positions and orientation from PyBullet
-        drone_pos, drone_quat = p.getBasePositionAndOrientation(self.drone_id, physicsClientId=self._client)
-        drone_euler = p.getEulerFromQuaternion(drone_quat)  # [roll, pitch, yaw]
-        
-        # Extract target position (e.g., the hoop goal)
-        goal_pos = np.array(self.goal_pos)
-        current_pos = np.array(drone_pos)
-        
-        # 2. PHASE 1: Stabilization & Hover rewards (Crucial for early training)
-        # Target a safe altitude (e.g., 1.0 meter)
-        target_z = 1.0
-        z_error = abs(current_pos[2] - target_z)
-        reward_hover = np.exp(-2.0 * z_error)  # Max 1.0 when perfectly at 1.0m altitude
-        
-        # Severe penalty for tilting (keeps it flat like a Tello autopilot would)
-        # Tello's internal IMU prevents flips, so we must force the RL to stay flat
-        tilt_penalty = -(drone_euler[0]**2 + drone_euler[1]**2)
+        p.resetBaseVelocity(
+            body_id, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0],
+            physicsClientId=self._client,
+        )
 
-        # 3. PHASE 2: Navigation / Striker rewards
-        # Calculate Euclidean distance to the hoop center
-        dist_to_goal = np.linalg.norm(current_pos - goal_pos)
-        reward_dist = np.exp(-1.0 * dist_to_goal)  # Spikes close to 1.0 as it nears goal
+    def _apply_action(self, action):
+        """Map normalized action [-1, 1]^4 to real per-motor thrust/torque.
 
-        # 4. CONDITIONAL SHAPING MIX
-        if z_error > 0.3 or abs(drone_euler[0]) > 0.4 or abs(drone_euler[1]) > 0.4:
-            # Drone is unstable or on the ground. Focus exclusively on stabilization.
-            reward = (1.5 * reward_hover) + (0.5 * tilt_penalty)
+        action[0] = Roll
+        action[1] = Pitch
+        action[2] = Throttle
+        action[3] = Yaw
+        """
+        act_roll, act_pitch, act_throttle, act_yaw = np.clip(action, -1.0, 1.0)
+
+        # Base throttle maps around the Tello's hover RPM.
+        rpm_range = MAX_RPM - HOVER_RPM
+        base_rpm = HOVER_RPM + act_throttle * rpm_range
+
+        # Standard Crazyflie/Quad-X motor mixing. Roll/pitch/yaw are scaled
+        # by a fraction (ATTITUDE_GAIN) of the same RPM authority as
+        # throttle — without any scaling, a raw action in [-1, 1] shifts
+        # RPM by at most 1 out of a base around 28,500+, i.e. ~0.003%
+        # control authority, not enough to tilt the drone at all.
+        attitude_range = rpm_range * ATTITUDE_GAIN
+        rpm_0 = base_rpm + attitude_range * (-act_roll + act_pitch + act_yaw)
+        rpm_1 = base_rpm + attitude_range * (-act_roll - act_pitch - act_yaw)
+        rpm_2 = base_rpm + attitude_range * (act_roll - act_pitch + act_yaw)
+        rpm_3 = base_rpm + attitude_range * (act_roll + act_pitch - act_yaw)
+
+        rpms = np.clip(np.array([rpm_0, rpm_1, rpm_2, rpm_3]), 0, MAX_RPM)
+
+        # RPM -> physical forces (N) and torques (N*m).
+        forces = (rpms ** 2) * DRONE_KF
+        torques = (rpms ** 2) * DRONE_KM
+
+        total_torque_z = torques[0] - torques[1] + torques[2] - torques[3]
+
+        # LINK_FRAME forces/torques are given in the drone's own body frame
+        # and PyBullet rotates them into world space using its current
+        # orientation. Each rotor's thrust is applied at its own prop link
+        # (prop0_link..prop3_link, offset from the body's centre per
+        # cf2x.urdf) rather than summed at the centre of mass — otherwise
+        # the lever-arm is lost and differential thrust can never produce
+        # roll/pitch torque, leaving the drone unable to translate.
+        for i in range(4):
+            p.applyExternalForce(
+                self.drone_id, linkIndex=i,
+                forceObj=[0, 0, forces[i]], posObj=[0, 0, 0],
+                flags=p.LINK_FRAME, physicsClientId=self._client,
+            )
+        p.applyExternalTorque(
+            self.drone_id, linkIndex=-1,
+            torqueObj=[0, 0, total_torque_z],
+            flags=p.LINK_FRAME, physicsClientId=self._client,
+        )
+
+    def _compute_reward(self, termination_reason):
+        """Potential-based progress shaping toward the hoop, plus sparse
+        score/crash/flip/collision/miss bonuses and penalties.
+
+        Shaping rewards the change in distance to the goal each step, not
+        the absolute distance — see PROGRESS_SCALE's comment for why.
+        _prev_dist_to_goal/_prev_lateral_dist must be updated every call
+        (including on the terminal branches, since collisions don't end the
+        episode) so the next step's delta is measured against the right
+        baseline.
+
+        termination_reason comes from _check_done() (already computed once
+        by step()) rather than being re-derived here, so this can see
+        outcomes like "flipped" that aren't otherwise visible from
+        drone_pos/_scored() alone.
+        """
+        drone_pos, _ = p.getBasePositionAndOrientation(
+            self.drone_id, physicsClientId=self._client
+        )
+        dist_to_goal = np.linalg.norm(np.array(drone_pos) - np.array(self.goal_pos))
+        lateral_dist = np.linalg.norm(
+            np.array(drone_pos[1:]) - np.array(self.goal_pos[1:])
+        )
+
+        if termination_reason == "crashed":
+            reward = CRASH_PENALTY
+        elif termination_reason == "flipped":
+            reward = FLIP_PENALTY
+        elif self._collided_with_opponent():
+            reward = COLLISION_PENALTY
+        elif termination_reason == "scored":
+            reward = SCORE_REWARD
+        elif termination_reason == "missed_goal":
+            reward = MISS_PENALTY
         else:
-            # Drone is stable and airborne! Heavily incentivize moving towards the goal.
-            reward = (0.3 * reward_hover) + (2.5 * reward_dist) + (0.2 * tilt_penalty)
+            progress = self._prev_dist_to_goal - dist_to_goal
+            reward = PROGRESS_SCALE * progress + self.TIME_PENALTY
+            # See LATERAL_SCALE's comment: only on final approach, so this
+            # doesn't fight goalkeeper-dodging earlier in the field.
+            if drone_pos[0] >= FINAL_APPROACH_X:
+                lateral_progress = self._prev_lateral_dist - lateral_dist
+                reward += LATERAL_SCALE * lateral_progress
 
-        # 5. Terminal sparse rewards (matching your constants)
-        if current_pos[2] < 0.15:  # Ground crash
-            reward += CRASH_PENALTY
-        elif dist_to_goal < self.goal_radius and abs(current_pos[0] - goal_pos[0]) < 0.1:
-            reward += SCORE_REWARD  # Through the hoop!
-
+        self._prev_dist_to_goal = dist_to_goal
+        self._prev_lateral_dist = lateral_dist
         return float(reward)
 
     def _scored(self, drone_pos):
         """True once the drone has flown through the goal hoop's opening."""
-        through_plane = abs(drone_pos[0] - self.goal_pos[0])
+        through_plane = drone_pos[0] >= self.goal_pos[0]
         lateral_dist = np.linalg.norm(
             np.array(drone_pos[1:]) - np.array(self.goal_pos[1:])
         )
-        return through_plane < 0.1 and lateral_dist < self.goal_radius
+        return through_plane and lateral_dist <= self.goal_radius
 
     def _crashed(self):
         """True if the drone is touching the ground plane."""
@@ -276,31 +534,45 @@ class DroneSoccerEnv(gym.Env):
         return len(contacts) > 0
 
     def _collided_with_opponent(self):
-        """True if the drone is touching the opponent drone."""
-        contacts = p.getContactPoints(
-            bodyA=self.drone_id, bodyB=self.opponent_id, physicsClientId=self._client
+        """True if the drone is touching any opponent drone."""
+        return any(
+            len(p.getContactPoints(
+                bodyA=self.drone_id, bodyB=opp_id, physicsClientId=self._client
+            )) > 0
+            for opp_id in self.opponent_ids
         )
-        return len(contacts) > 0
 
     def _check_done(self):
-        drone_pos, drone_quat = p.getBasePositionAndOrientation(self.drone_id, physicsClientId=self._client)
-        drone_euler = p.getEulerFromQuaternion(drone_quat)
-        
-        # Terminate if the drone hits the floor
-        if drone_pos[2] < 0.15:
-            return True
-            
-        # Terminate if the drone flips past 60 degrees (unrecoverable state)
-        if abs(drone_euler[0]) > 1.05 or abs(drone_euler[1]) > 1.05:
-            return True
-            
-        # Terminate only if it actually flew through the hoop's opening —
-        # not just past the goal's X plane, which would also fire for a
-        # drone that flew wide of the hoop entirely.
-        if self._scored(drone_pos):
-            return True
+        """Episode termination: scored, crashed, or flown past the hoop's plane.
 
-        return False
+        Returns a reason string once terminated ("crashed", "flipped",
+        "scored", "missed_goal", "out_of_bounds"), or None while still
+        in-flight — lets callers (step()'s info dict, watch.py, logging)
+        report why an episode ended, not just that it did.
+        """
+        drone_pos, drone_orn = p.getBasePositionAndOrientation(
+            self.drone_id, physicsClientId=self._client
+        )
+
+        if drone_pos[2] < 0.05:
+            return "crashed"
+
+        drone_euler = p.getEulerFromQuaternion(drone_orn)
+        if abs(drone_euler[0]) > MAX_TILT_RAD or abs(drone_euler[1]) > MAX_TILT_RAD:
+            return "flipped"
+
+        # Terminate once the drone has flown past the hoop's X plane at all,
+        # whether it threaded the opening (see _scored, used for the score
+        # bonus in _compute_reward) or missed wide — either way the shot is over.
+        if drone_pos[0] >= self.goal_pos[0]:
+            return "scored" if self._scored(drone_pos) else "missed_goal"
+
+        # Out of bounds: flew behind the spawn line or off the side of the
+        # 3x3m field. No physical wall — flying out just ends the episode.
+        if drone_pos[0] < FIELD_X_MIN or abs(drone_pos[1]) > FIELD_Y_HALF:
+            return "out_of_bounds"
+
+        return None
 
     # ------------------------------------------------------------------ #
     # Observation: drone state + camera -> detector -> feature vector
@@ -320,37 +592,51 @@ class DroneSoccerEnv(gym.Env):
     def _get_detection_features(self):
         """
         Renders the drone's onboard camera, runs the detector (if provided),
-        and returns [detected_flag, rel_x, rel_y, distance].
+        and returns N_OPPONENTS blocks of [detected_flag, rel_x, rel_y,
+        distance], one per opponent, concatenated in self.opponent_ids order.
 
-        With no detector attached, this uses PyBullet's ground-truth depth
-        buffer directly (useful for early sim-only training/debugging before
-        your real detector is plugged in). The camera is only rendered when
-        a detector is actually attached — otherwise it'd be dead work, and
-        camera rendering is often the most expensive part of a step.
+        With no detector attached, this uses PyBullet's ground-truth
+        position of every opponent directly (useful for early sim-only
+        training/debugging before your real detector is plugged in). The
+        camera is only rendered when a detector is actually attached —
+        otherwise it'd be dead work, and camera rendering is often the most
+        expensive part of a step.
         """
         if self.detector is not None:
             rgb, depth = self._render_camera()
-            # Expect detector(rgb) -> list of (x1, y1, x2, y2, conf, cls)
-            detections = self.detector(rgb)
-            if len(detections) == 0:
-                return np.array([0.0, 0.0, 0.0, -1.0], dtype=np.float32)
-            x1, y1, x2, y2, conf, cls = detections[0]
-            cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
-            distance = self._depth_to_distance(depth[cy, cx])
-            rel_x = (cx / self.img_size) * 2 - 1  # normalize to [-1, 1]
-            rel_y = (cy / self.img_size) * 2 - 1
-            return np.array([1.0, rel_x, rel_y, distance], dtype=np.float32)
+            # Expect detector(rgb) -> list of (x1, y1, x2, y2, conf, cls),
+            # one entry per detected opponent. A real detector has no
+            # persistent per-opponent identity across frames, so this just
+            # takes up to N_OPPONENTS detections (highest confidence first)
+            # and pads any remaining slots as "not detected".
+            detections = sorted(self.detector(rgb), key=lambda d: d[4], reverse=True)
+            blocks = []
+            for i in range(N_OPPONENTS):
+                if i >= len(detections):
+                    blocks.append(np.array([0.0, 0.0, 0.0, -1.0], dtype=np.float32))
+                    continue
+                x1, y1, x2, y2, conf, cls = detections[i]
+                cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+                distance = self._depth_to_distance(depth[cy, cx])
+                rel_x = (cx / self.img_size) * 2 - 1  # normalize to [-1, 1]
+                rel_y = (cy / self.img_size) * 2 - 1
+                blocks.append(np.array([1.0, rel_x, rel_y, distance], dtype=np.float32))
+            return np.concatenate(blocks)
 
-        # Fallback: ground-truth relative position (sim-only sanity check)
+        # Fallback: ground-truth relative position of every opponent
+        # (sim-only sanity check)
         drone_pos, _ = p.getBasePositionAndOrientation(
             self.drone_id, physicsClientId=self._client
         )
-        opp_pos, _ = p.getBasePositionAndOrientation(
-            self.opponent_id, physicsClientId=self._client
-        )
-        rel = np.array(opp_pos) - np.array(drone_pos)
-        distance = np.linalg.norm(rel)
-        return np.array([1.0, rel[0], rel[1], distance], dtype=np.float32)
+        blocks = []
+        for opp_id in self.opponent_ids:
+            opp_pos, _ = p.getBasePositionAndOrientation(
+                opp_id, physicsClientId=self._client
+            )
+            rel = np.array(opp_pos) - np.array(drone_pos)
+            distance = np.linalg.norm(rel)
+            blocks.append(np.array([1.0, rel[0], rel[1], distance], dtype=np.float32))
+        return np.concatenate(blocks)
 
     def _render_camera(self):
         """Render an onboard camera image + depth buffer from the drone's pose."""

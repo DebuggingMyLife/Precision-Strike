@@ -1,0 +1,47 @@
+pybullet build time: Sep 16 2026 22:14:57
+pybullet build time: Sep 16 2026 22:14:57
+pybullet build time: Sep 16 2026 22:14:57
+pybullet build time: Sep 16 2026 22:14:57
+pybullet build time: Sep 16 2026 22:14:57
+pybullet build time: Sep 16 2026 22:14:57
+pybullet build time: Sep 16 2026 22:14:57
+pybullet build time: Sep 16 2026 22:14:57
+pybullet build time: Sep 16 2026 22:14:57
+pybullet build time: Sep 16 2026 22:14:57
+pybullet build time: Sep 16 2026 22:14:57
+Logging to ./tb_logs/RecurrentPPO_v4_continued_0
+C:\Users\Oat\OneDrive - UTS\Spring 2026\Reinforcement Learning\A3\Precision-Strike\.venv\Lib\site-packages\stable_baselines3\common\callbacks.py:419: UserWarning: Training and eval env are not of the same type<stable_baselines3.common.vec_env.subproc_vec_env.SubprocVecEnv object at 0x0000022D54ABA190> != <stable_baselines3.common.vec_env.dummy_vec_env.DummyVecEnv object at 0x0000022D7A243ED0>
+  warnings.warn("Training and eval env are not of the same type" f"{self.training_env} != {self.eval_env}")
+[progress] timestep 5007370
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 294      |
+|    ep_rew_mean     | -28.3    |
+| time/              |          |
+|    fps             | 1203     |
+|    iterations      | 1        |
+|    time_elapsed    | 4        |
+|    total_timesteps | 5012480  |
+---------------------------------
+----------------------------------------
+| rollout/                |            |
+|    ep_len_mean          | 295        |
+|    ep_rew_mean          | -28.2      |
+| time/                   |            |
+|    fps                  | 191        |
+|    iterations           | 2          |
+|    time_elapsed         | 53         |
+|    total_timesteps      | 5017600    |
+| train/                  |            |
+|    approx_kl            | 0.04007692 |
+|    clip_fraction        | 0.233      |
+|    clip_range           | 0.2        |
+|    entropy_loss         | -4.12      |
+|    explained_variance   | 0.407      |
+|    learning_rate        | 0.0003     |
+|    loss                 | 723        |
+|    n_updates            | 10280      |
+|    policy_gradient_loss | -0.00179   |
+|    std                  | 0.69       |
+|    value_loss           | 82.9       |
+----------------------------------------
