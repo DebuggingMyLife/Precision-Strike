@@ -1,15 +1,12 @@
 """
-Starter training script for the drone soccer striker task using RecurrentPPO.
+Fresh-start training script for the drone soccer striker task using
+RecurrentPPO. Trains a brand-new model from scratch — see train_continue.py
+to continue training an existing one instead. Swap in a trained detector by
+passing it to DroneSoccerEnv(detector=your_model).
 
 Run:
     python train.py
-
-Once drone_soccer_env.py has real dynamics/rewards filled in, this script
-should work as-is. Swap in your trained detector by passing it to
-DroneSoccerEnv(detector=your_model).
 """
-
-import time
 
 import torch
 from sb3_contrib import RecurrentPPO
@@ -24,11 +21,15 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from drone_soccer_env import DroneSoccerEnv
 
+# v1 and v3 are the two prior fresh-start runs (see PROGRESS.md) — this must
+# be changed before running again, or it will silently overwrite one of them.
+OUTPUT_MODEL = "drone_soccer_ppo_fresh"
+
 # TF32 matmuls: free precision-for-speed tradeoff on Ampere+/Blackwell GPUs,
 # and RL gradients are noisy enough that the reduced precision doesn't matter.
 torch.set_float32_matmul_precision("high")
 
-# The policy itself is tiny (MLP+LSTM on a 14-number observation), so it
+# The policy itself is tiny (MLP+LSTM on a 26-number observation), so it
 # doesn't need many CPU threads; leave the cores free for the env subprocesses
 # instead of letting this main process's torch ops compete for them.
 torch.set_num_threads(1)
@@ -41,46 +42,6 @@ def make_env(render_mode=None):
         # tell whether the policy is actually improving at the task.
         return Monitor(DroneSoccerEnv(detector=None, render_mode=render_mode))
     return _init
-
-
-class LivePreviewCallback(BaseCallback):
-    """Every `preview_freq` timesteps, open a GUI window and fly the current
-    policy live for a bit, so you can watch training progress over time.
-
-    Training itself stays headless (fast) across all N_ENVS; this uses a
-    separate, one-off env instance with the model's live weights.
-    """
-
-    def __init__(self, preview_freq=50_000, preview_steps=300, verbose=0):
-        super().__init__(verbose)
-        self.preview_freq = preview_freq
-        self.preview_steps = preview_steps
-        self._last_preview = 0
-
-    def _on_step(self):
-        if self.num_timesteps - self._last_preview >= self.preview_freq:
-            self._last_preview = self.num_timesteps
-            self._run_preview()
-        return True
-
-    def _run_preview(self):
-        print(f"\n[preview] timestep {self.num_timesteps}: opening GUI window...")
-        preview_env = DroneSoccerEnv(detector=None, render_mode="human")
-        obs, _ = preview_env.reset()
-        lstm_states = None
-        episode_start = True
-        for _ in range(self.preview_steps):
-            action, lstm_states = self.model.predict(
-                obs, state=lstm_states, episode_start=episode_start,
-                deterministic=True,
-            )
-            obs, reward, terminated, truncated, info = preview_env.step(action)
-            episode_start = terminated or truncated
-            time.sleep(1 / 60)
-            if episode_start:
-                obs, _ = preview_env.reset()
-                lstm_states = None
-        preview_env.close()
 
 
 class ProgressPrintCallback(BaseCallback):
@@ -136,12 +97,12 @@ class TerminationReasonCallback(BaseCallback):
 if __name__ == "__main__":
     N_ENVS = 10  # one process per env; tune to your CPU core count
 
-    # SubprocVecEnv runs each env in its own process for real CPU parallelism
-    # (PyBullet's physics stepping is CPU-bound, independent of GPU training).
-    # Swap back to DummyVecEnv if you need simpler tracebacks while debugging.
-    # All training envs stay headless for speed — SB3's VecEnv requires every
-    # sub-env to share one render_mode, so a mixed GUI/headless vec env isn't
-    # possible. LivePreviewCallback below shows progress instead.
+    # SubprocVecEnv runs each env in its own process. Note: benchmarked
+    # against DummyVecEnv (all envs sequential in one process) and found no
+    # real difference (1.05x) — the actual bottleneck is the PPO update
+    # phase (LSTM gradient steps), not environment stepping, for this small
+    # a policy. Swap to DummyVecEnv if you want simpler tracebacks while
+    # debugging; it won't cost meaningful throughput.
     env = SubprocVecEnv([make_env() for _ in range(N_ENVS)])
 
     policy_kwargs = dict(
@@ -191,7 +152,7 @@ if __name__ == "__main__":
     checkpoint_callback = CheckpointCallback(
         save_freq=max(50_000 // N_ENVS, 1),
         save_path="./checkpoints/",
-        name_prefix="drone_soccer_ppo",
+        name_prefix=OUTPUT_MODEL,
     )
 
     # PPO isn't monotonic — a policy can peak then regress (entropy
@@ -207,8 +168,8 @@ if __name__ == "__main__":
     eval_env = DummyVecEnv([make_env()])
     eval_callback = EvalCallback(
         eval_env,
-        best_model_save_path="./checkpoints/best_model/",
-        log_path="./eval_logs/",
+        best_model_save_path=f"./checkpoints/best_model_{OUTPUT_MODEL}/",
+        log_path=f"./eval_logs_{OUTPUT_MODEL}/",
         eval_freq=max(50_000 // N_ENVS, 1),
         n_eval_episodes=10,
         deterministic=False,
@@ -216,10 +177,6 @@ if __name__ == "__main__":
 
     model.learn(
         total_timesteps=1_000_000,
-        # LivePreviewCallback dropped for max training speed: it pauses to
-        # open a real-time GUI window every preview_freq steps, which costs
-        # both the render time itself and the overhead of spinning up a
-        # separate PyBullet client each time.
         callback=CallbackList([
             ProgressPrintCallback(print_freq=100_000),
             TerminationReasonCallback(report_freq=50_000),
@@ -227,6 +184,6 @@ if __name__ == "__main__":
             eval_callback,
         ]),
     )
-    model.save("drone_soccer_ppo_v3")
+    model.save(OUTPUT_MODEL)
 
-    print("Training complete. Model saved to drone_soccer_ppo_v3.zip")
+    print(f"Training complete. Model saved to {OUTPUT_MODEL}.zip")

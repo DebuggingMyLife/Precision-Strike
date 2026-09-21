@@ -46,8 +46,10 @@ episode_num = 1
 for _ in range(5000):
     # deterministic=False on purpose: this policy's mean action alone
     # flips almost every episode, but sampling from its actual learned
-    # distribution (what training itself used) scores ~70% of the time.
+    # distribution (what training itself used) is what actually scores.
     # deterministic=True here would show a misleadingly broken drone.
+    # (The ~70% figure once quoted here was from the old single-opponent
+    # env's v2 model — see PROGRESS.md for current scored-rate numbers.)
     action, lstm_states = model.predict(
         obs, state=lstm_states, episode_start=episode_start, deterministic=False
     )

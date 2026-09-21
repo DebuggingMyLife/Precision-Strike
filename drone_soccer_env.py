@@ -1,18 +1,14 @@
 """
-Starter Gymnasium environment for the drone soccer striker task.
+Gymnasium environment for the drone soccer striker task: fly a simulated
+quadrotor from a spawn line through a hoop, avoiding a patrolling goalkeeper
+and randomly-moving opponents. See PROGRESS.md for the reward-tuning history.
 
-This is a skeleton, not a finished simulation. Fill in:
-  - self._load_scene(): drone body is real (see below); still need goal/field geometry
-  - self._apply_action(): real per-motor thrust/torque now wired up (see below)
-  - self._compute_reward(): your reward function
-  - self._check_done(): episode termination logic
-
-The observation pipeline is already wired up:
-  drone state + camera RGB/depth -> object detector -> distance/bearing to opponent
-  -> flat feature vector fed to the (Recurrent) PPO policy.
+Observation pipeline: drone state + (ground-truth position, or camera RGB/
+depth -> object detector if `detector` is set) -> distance/bearing to each
+opponent -> flat feature vector fed to the (Recurrent) PPO policy.
 
 During training use p.DIRECT (headless, fast). Switch to p.GUI only when you
-want to watch an episode locally.
+want to watch an episode locally (see watch.py).
 """
 
 import os
@@ -525,13 +521,6 @@ class DroneSoccerEnv(gym.Env):
             np.array(drone_pos[1:]) - np.array(self.goal_pos[1:])
         )
         return through_plane and lateral_dist <= self.goal_radius
-
-    def _crashed(self):
-        """True if the drone is touching the ground plane."""
-        contacts = p.getContactPoints(
-            bodyA=self.drone_id, bodyB=self.plane_id, physicsClientId=self._client
-        )
-        return len(contacts) > 0
 
     def _collided_with_opponent(self):
         """True if the drone is touching any opponent drone."""
