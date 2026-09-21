@@ -13,6 +13,7 @@ task. Chronological within each section; newest at the bottom.
 | `v3` | 1M (fresh) | current (4 opponents) | Fresh run under the rewritten env. Mostly failing at this point (flip/miss dominated, near-zero scored) — expected, undertrained. |
 | `v4` | +4M (from v3), 5M total | current | See fixes below. Final breakdown (last ~1M steps, 3125 episodes): missed_goal 52%, flipped 37%, out_of_bounds 6%, scored 5%, crashed 0.4%. |
 | `v5` | +4M (from v4), 9M total | current + lateral shaping | Final breakdown (last ~1M steps, 3638 episodes): missed_goal 56%, flipped 32%, scored 12%, out_of_bounds 0.2%, crashed 0%. Raw scored% roughly doubled vs v4 (4.7%→11.6%); shot accuracy scored/(scored+missed) also roughly doubled (~8.3%→~17.1%). `std` continued sharpening 0.7→0.457, no runaway. See lateral-shaping result note below. |
+| `v6` | +4M (from v5), 13M total | current + lateral shaping, `device="cpu"` | Same reward as v5 (no changes) — testing whether shot accuracy keeps improving with more training alone. It did: scored 11.6%→14.5%, shot accuracy 17.1%→20.8%, flipped 31.7%→30.2%. Not plateaued yet. First run trained on `device="cpu"` (see hardware notes) — resumed from a mid-run checkpoint (11.21M steps) rather than restarting, since the only thing wrong with the original run was the device, not the training itself. |
 
 ## Key findings & fixes
 
@@ -29,10 +30,11 @@ task. Chronological within each section; newest at the bottom.
 - Training is CPU-bound (PyBullet physics stepped across `SubprocVecEnv` workers), not GPU-bound — the policy net (tiny MLP+LSTM) barely uses the GPU (~13% util observed).
 - Current machine: Ryzen 5 7500F (6 cores/12 threads). `N_ENVS` raised from 8 → 10 (oversubscribing SMT threads, leaving 2 free for main process/OS) — safe and effective in practice.
 - If moving to a Ryzen 7 9700X (8 cores/16 threads): recommend `N_ENVS≈13-14` (same oversubscription ratio), not just matching physical core count. Estimated ~5-5.5h for a run that takes 8h here (more parallel envs + faster per-core Zen5 performance).
+- **Task Manager showing only ~36% CPU utilization during training led to a deeper look.** Initial hypothesis (SubprocVecEnv's Windows IPC overhead dominating) was wrong: a side-by-side benchmark of `DummyVecEnv` vs `SubprocVecEnv` inside the real training loop showed no difference (1.05x) — both settle to the same ~120-140 fps. The actual bottleneck is the **PPO update phase** (10 epochs x ~20 minibatches per rollout, LSTM forward+backward through each), not environment stepping — during that phase only the main process works while all env-worker processes idle, which is what shows up as low utilization. Confirmed fix: **`device="cpu"` beats the default `"auto"`/cuda by 1.29x** (130.6 vs 101.4 fps) for this tiny policy — GPU kernel-launch/PCIe-transfer overhead per minibatch exceeds the compute it saves. Applied to `train.py`/`train_continue.py`. Lesson: a raw single-env stepping benchmark without policy inference/gradient updates is not representative of real training throughput — measure the actual loop.
 
 ## Open items / next steps
 
-- `out_of_bounds` still has no explicit penalty (though it's nearly disappeared on its own in v5, 0.2%).
-- Flip-recovery control authority (`ATTITUDE_GAIN`/`angularDamping`) not yet tuned — flip rate still ~32% after v5. Worth trying next, one variable at a time (raise `ATTITUDE_GAIN` OR `angularDamping`, not both, so the effect is attributable).
-- Missed_goal is still the modal outcome (56%) even after lateral shaping helped (shot accuracy ~17%) — may need another round of continued training now that the shaping term has something to work with, or a stronger `LATERAL_SCALE`.
+- `out_of_bounds` still has no explicit penalty (nearly disappeared on its own though, 0.1% by v6).
+- Flip-recovery control authority (`ATTITUDE_GAIN`/`angularDamping`) not yet tuned — flip rate still ~30% after v6. Worth trying next, one variable at a time (raise `ATTITUDE_GAIN` OR `angularDamping`, not both, so the effect is attributable).
+- Missed_goal is still the modal outcome (55%), but shot accuracy is still climbing with more training alone (17.1%→20.8%, v5→v6) and hasn't plateaued — reasonable to keep continuing before touching `MISS_PENALTY`.
 - Detector is still `None` (ground-truth opponent positions) — swapping in a real detector later will introduce observation noise the current policy has never trained against; expect a regression when that happens.

@@ -1,7 +1,10 @@
 """
-Continuation training script: loads drone_soccer_ppo_v4 and trains it for
-4,000,000 more timesteps, now with the LATERAL_SCALE final-approach shaping
-term added in drone_soccer_env.py.
+Continuation training script: resumes the v5->v6 run from its last checkpoint
+(11,211,200 steps) rather than restarting from v5 — that run wasn't flawed,
+just running on the wrong device (see device="cpu" below), so no progress is
+being discarded here, unlike earlier restarts in this project. Same reward as
+v4->v5 (no changes) — checking whether shot accuracy keeps improving with
+more training on the lateral shaping term before tuning MISS_PENALTY further.
 
 Run:
     python train_continue.py
@@ -25,9 +28,12 @@ from train import ProgressPrintCallback, TerminationReasonCallback, make_env
 torch.set_float32_matmul_precision("high")
 torch.set_num_threads(1)
 
-SOURCE_MODEL = "drone_soccer_ppo_v4"
-OUTPUT_MODEL = "drone_soccer_ppo_v5"
-ADDITIONAL_TIMESTEPS = 4_000_000
+SOURCE_MODEL = "checkpoints/drone_soccer_ppo_v5_continued_11211200_steps"
+OUTPUT_MODEL = "drone_soccer_ppo_v6"
+# v5->v6 originally targeted 13,000,000 total (v5's 9M + 4,000,000). Resuming
+# from the 11,211,200-step checkpoint instead of restarting from v5, so only
+# the remaining budget is left to run.
+ADDITIONAL_TIMESTEPS = 13_000_000 - 11_211_200
 
 
 if __name__ == "__main__":
@@ -35,12 +41,12 @@ if __name__ == "__main__":
 
     env = SubprocVecEnv([make_env() for _ in range(N_ENVS)])
 
-    model = RecurrentPPO.load(SOURCE_MODEL, env=env)
-    # v4 already has ent_coef=0.001 baked in (set explicitly during the
-    # v3->v4 run and preserved on save), so no override needed this time —
-    # see git history if tuning ent_coef again.
+    # device="cpu": see train.py's device comment — benchmarked 1.29x faster
+    # than the "auto"/cuda default for this tiny policy.
+    model = RecurrentPPO.load(SOURCE_MODEL, env=env, device="cpu")
+    # v5 already has ent_coef=0.001 baked in, so no override needed.
 
-    # name_prefix distinguishes this from the v3->v4 run's checkpoints:
+    # name_prefix distinguishes this from the v4->v5 run's checkpoints:
     # reset_num_timesteps=False means this run's step count picks up from
     # SOURCE_MODEL's, so with the same N_ENVS/n_steps, a shared prefix would
     # land on the exact same timestep numbers as the old run's files and
@@ -48,7 +54,7 @@ if __name__ == "__main__":
     checkpoint_callback = CheckpointCallback(
         save_freq=max(50_000 // N_ENVS, 1),
         save_path="./checkpoints/",
-        name_prefix="drone_soccer_ppo_v4_continued",
+        name_prefix="drone_soccer_ppo_v5_continued",
     )
 
     # See train.py's eval_callback comment: PPO can regress after its peak,
@@ -58,8 +64,8 @@ if __name__ == "__main__":
     eval_env = DummyVecEnv([make_env()])
     eval_callback = EvalCallback(
         eval_env,
-        best_model_save_path="./checkpoints/best_model_continued_v4/",
-        log_path="./eval_logs_continued_v4/",
+        best_model_save_path="./checkpoints/best_model_continued_v5/",
+        log_path="./eval_logs_continued_v5/",
         eval_freq=max(50_000 // N_ENVS, 1),
         n_eval_episodes=10,
         deterministic=False,
@@ -74,12 +80,12 @@ if __name__ == "__main__":
             eval_callback,
         ]),
         reset_num_timesteps=False,
-        # Distinct from "RecurrentPPO_v3_continued": reset_num_timesteps=False
+        # Distinct from "RecurrentPPO_v4_continued": reset_num_timesteps=False
         # makes SB3 log continuations into the latest existing run dir for a
         # given name rather than a fresh one — reusing the same name here
-        # would interleave the v3->v4 and v4->v5 curves on one tensorboard
+        # would interleave the v4->v5 and v5->v6 curves on one tensorboard
         # x-axis.
-        tb_log_name="RecurrentPPO_v4_continued",
+        tb_log_name="RecurrentPPO_v5_continued",
     )
     model.save(OUTPUT_MODEL)
 

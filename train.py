@@ -176,6 +176,12 @@ if __name__ == "__main__":
         policy_kwargs=policy_kwargs,
         verbose=1,
         tensorboard_log="./tb_logs/",
+        # Benchmarked: device="cpu" beat "cuda" (the "auto" default) by 1.29x
+        # for this policy (64x64 MLP + 128 LSTM) — it's small enough that GPU
+        # kernel-launch/PCIe-transfer overhead per minibatch outweighs the
+        # compute it saves. Confirmed via bench_device.py: 130.6 fps (cpu) vs
+        # 101.4 fps (cuda), same N_ENVS/SubprocVecEnv/source model.
+        device="cpu",
     )
 
     # save_freq counts calls to _on_step(), which fires once per rollout
