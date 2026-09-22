@@ -72,7 +72,10 @@ if __name__ == "__main__":
             eval_callback,
         ]),
         reset_num_timesteps=False,
-        tb_log_name="RecurrentPPO_v6_continued",
+        # Stage_1/2/3 = v3->v4/v4->v5/v5->v6 (see PROGRESS.md) — this v6->v7
+        # run is Stage_4. Bump this each time SOURCE_MODEL/OUTPUT_MODEL move
+        # to the next pair, to keep tensorboard runs matching the report.
+        tb_log_name="Stage_4",
     )
     model.save(OUTPUT_MODEL)
 
