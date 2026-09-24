@@ -9,20 +9,24 @@ __pycache__/
 *.pyo
 *.egg-info/
 
-# Training artifacts
-*.zip
-*.pth
-*.pt
-*.ckpt
-logs/
-runs/
-checkpoints/
-models/
-tensorboard/
-
 # Ultralytics
 yolo*.pt
 *.onnx
+
+# Trained models — only push the ones actually used in the report (see
+# PROGRESS.md's model lineage table). v1/v2 are incompatible with the
+# current env; v6.zip/v7.zip are raw final saves that regressed from a
+# mid-run peak (v6_best/v7_best are the corrected results).
+*.zip
+!drone_soccer_ppo_v3.zip
+!drone_soccer_ppo_v4.zip
+!drone_soccer_ppo_v5.zip
+!drone_soccer_ppo_v6_best.zip
+!drone_soccer_ppo_v7_best.zip
+
+# Intermediate training checkpoints and eval-callback outputs — not needed
+# once the best model per stage has been picked out and copied above.
+checkpoints/
 
 # OS / editor
 .DS_Store

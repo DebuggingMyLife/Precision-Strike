@@ -21,8 +21,11 @@ from train import ProgressPrintCallback, TerminationReasonCallback, make_env
 torch.set_float32_matmul_precision("high")
 torch.set_num_threads(1)
 
-SOURCE_MODEL = "drone_soccer_ppo_v6"
-OUTPUT_MODEL = "drone_soccer_ppo_v7"
+# Source from v7_best, NOT v6.zip or v7.zip — both of those regressed from a
+# mid-run peak (see PROGRESS.md's "PPO's non-monotonic regression" note).
+# v7_best is the actual best model found so far.
+SOURCE_MODEL = "drone_soccer_ppo_v7_best"
+OUTPUT_MODEL = "drone_soccer_ppo_v8"
 ADDITIONAL_TIMESTEPS = 4_000_000
 
 
@@ -34,7 +37,7 @@ if __name__ == "__main__":
     # device="cpu": see train.py's device comment — benchmarked 1.29x faster
     # than the "auto"/cuda default for this tiny policy.
     model = RecurrentPPO.load(SOURCE_MODEL, env=env, device="cpu")
-    # v6 already has ent_coef=0.001 baked in, so no override needed.
+    # v7_best already has ent_coef=0.001 baked in, so no override needed.
 
     # name_prefix/tb_log_name/eval paths below must be unique per lineage
     # (bump the "v6" to match SOURCE_MODEL whenever you change it above):
@@ -46,7 +49,7 @@ if __name__ == "__main__":
     checkpoint_callback = CheckpointCallback(
         save_freq=max(50_000 // N_ENVS, 1),
         save_path="./checkpoints/",
-        name_prefix="drone_soccer_ppo_v6_continued",
+        name_prefix="drone_soccer_ppo_v7_best_continued",
     )
 
     # See train.py's eval_callback comment: PPO can regress after its peak,
@@ -56,8 +59,8 @@ if __name__ == "__main__":
     eval_env = DummyVecEnv([make_env()])
     eval_callback = EvalCallback(
         eval_env,
-        best_model_save_path="./checkpoints/best_model_continued_v6/",
-        log_path="./eval_logs_continued_v6/",
+        best_model_save_path="./checkpoints/best_model_continued_v7_best/",
+        log_path="./eval_logs_continued_v7_best/",
         eval_freq=max(50_000 // N_ENVS, 1),
         n_eval_episodes=10,
         deterministic=False,
@@ -72,10 +75,15 @@ if __name__ == "__main__":
             eval_callback,
         ]),
         reset_num_timesteps=False,
-        # Stage_1/2/3 = v3->v4/v4->v5/v5->v6 (see PROGRESS.md) — this v6->v7
-        # run is Stage_4. Bump this each time SOURCE_MODEL/OUTPUT_MODEL move
-        # to the next pair, to keep tensorboard runs matching the report.
-        tb_log_name="Stage_4",
+        # Stage_1-4 = v3->v4/v4->v5/v5->v6/v6->v7 (see PROGRESS.md) — this
+        # v7_best->v8 run is Stage_5. Bump this each time SOURCE_MODEL/
+        # OUTPUT_MODEL move to the next pair, to keep tensorboard runs
+        # matching the report. After this run finishes, check its final
+        # save against checkpoints/best_model_continued_v7_best/best_model.zip
+        # before trusting it — v6 and v7 both regressed from their mid-run
+        # peak, v4 and v5 didn't, so this has to be checked every time, not
+        # assumed either way.
+        tb_log_name="Stage_5",
     )
     model.save(OUTPUT_MODEL)
 
