@@ -31,14 +31,32 @@ from gymnasium import spaces
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 DRONE_URDF = os.path.join(ASSETS_DIR, "cf2x.urdf")
 
-# DJI Tello drone soccer specs (overrides the cf2x.urdf body's own mass/thrust
-# tags below, applied via changeDynamics in _load_scene). No real Tello URDF
-# on hand, so cf2x.urdf's geometry is kept as a stand-in body shape.
-DRONE_MASS = 0.105            # 80g Tello + 25g soccer cage
-DRONE_KF = 3.16e-10           # thrust coefficient, N / (rad/s)^2 (kept from URDF tag for RPM mixing)
+# DJI Tello EDU (controlled over WiFi via its SDK) drone soccer specs
+# (overrides the cf2x.urdf body's own mass/thrust tags below, applied via
+# changeDynamics in _load_scene). No real Tello URDF on hand, so cf2x.urdf's
+# geometry is kept as a stand-in body shape. WiFi control itself isn't
+# modelled (no command/telemetry latency simulated) — noted here only as
+# confirmation of which real hardware variant these specs are meant to match.
+DRONE_MASS = 0.100            # Tello EDU body is 87g; assumed 100g with the soccer cage
+# KF/KM are NOT Tello-specific — inherited from the cf2x.urdf stand-in body's
+# own thrust/torque tags, since DJI doesn't publish per-motor thrust
+# coefficients for the Tello. This is safe for force output even so: HOVER_RPM
+# and MAX_RPM below are re-derived from DRONE_MASS/DRONE_THRUST2WEIGHT, so the
+# actual thrust delivered is governed by those (Tello-calibrated) values, not
+# by KF's absolute magnitude — KF just sets the internal RPM-to-force scale.
+DRONE_KF = 3.16e-10           # thrust coefficient, N / (rad/s)^2
 DRONE_KM = 7.94e-12           # torque coefficient, N*m / (rad/s)^2
-DRONE_THRUST2WEIGHT = 1.7     # Tello has a tight ~1.7:1 TWR ratio (not the cf2x's 2.25)
+# Unverified for the real Tello EDU — no authoritative DJI-published
+# thrust-to-weight figure on hand; kept at the prior estimate pending one.
+DRONE_THRUST2WEIGHT = 1.7
 GRAVITY_ACCEL = 9.81  # m/s^2
+
+# Physics substeps per simulated second (see _configure_physics's
+# p.setTimeStep). One env step == one physics step, so this is also how
+# many env steps make up one second of simulated time — used to convert
+# real-time durations (e.g. FLIP_GRACE_STEPS, RANDOM_OPPONENT_SPEED's m/s
+# figure) into step counts.
+PHYSICS_HZ = 240
 
 # cf2x.urdf's own base_link <inertial> tag: mass=0.027kg,
 # ixx=iyy=1.4e-5, izz=2.17e-5 (kg*m^2). changeDynamics only overrides mass
@@ -57,7 +75,11 @@ MAX_RPM = (DRONE_THRUST2WEIGHT * _GRAVITY_FORCE / (4 * DRONE_KF)) ** 0.5
 
 SCORE_REWARD = 50.0
 CRASH_PENALTY = -50.0
-COLLISION_PENALTY = -20.0
+# -20 -> -25: stronger deterrent, paired with the restitution bump below
+# (see DRONE_MASS's changeDynamics calls) so contact is both a bigger
+# physical event and a costlier one. Keeps the existing ordering intact
+# (COLLISION_PENALTY less severe than FLIP_PENALTY, see its comment below).
+COLLISION_PENALTY = -25.0
 # Previously missing entirely: _check_done() ends the episode on "flipped"
 # (tilt past MAX_TILT_RAD) but _compute_reward() had no matching branch, so
 # a flip that didn't also touch the ground scored the same as any ordinary
@@ -71,6 +93,11 @@ FLIP_PENALTY = -30.0
 # the course successfully, it just didn't thread the hoop, so this stays
 # lighter than the failure-mode penalties above.
 MISS_PENALTY = -10.0
+# The field boundary is a net, not a wall — flying into it doesn't end the
+# game, it just costs something. Same magnitude and same per-step-while-
+# touching pattern as COLLISION_PENALTY (not a one-time terminal penalty
+# like FLIP_PENALTY, since this no longer ends the episode).
+OUT_OF_BOUNDS_PENALTY = -20.0
 
 # Potential-based shaping: reward the change in distance to the goal each
 # step, not the absolute distance. An absolute-distance penalty charges the
@@ -91,7 +118,11 @@ PROGRESS_SCALE = 10.0
 # final approach — applying it for the whole flight would fight the
 # goalkeeper-avoidance detours needed earlier in the field.
 LATERAL_SCALE = 10.0
-FINAL_APPROACH_X = 2.0  # last third of the 0-3m field, past most dodging
+# FINAL_APPROACH_X (last third of the field's X length, past most dodging)
+# is set further down, once FIELD_X_MAX exists — it's formula-based on the
+# field size, not a hardcoded metre value, so resizing the field can't
+# silently gate the lateral shaping to start exactly at the goal plane
+# (i.e. never actually fire).
 
 # Fraction of the full throttle RPM range given to roll/pitch/yaw (see
 # _apply_action). At 1.0, three simultaneous max-deflection axes could sum
@@ -99,30 +130,101 @@ FINAL_APPROACH_X = 2.0  # last third of the 0-3m field, past most dodging
 # threshold before the policy can level out. Cutting this down makes the
 # drone less twitchy so it has a real chance to recover instead of flipping
 # every attempt.
-ATTITUDE_GAIN = 0.4
+#
+# 0.4 -> 0.6 (v7_best -> v8, Stage_5, isolated change, see PROGRESS.md):
+# the flip-mechanics diagnostic found the policy already fights the spin
+# with saturated action right up to a flip, it just doesn't have enough
+# torque to arrest it in time. Raising this gives it more recovery
+# authority. Run in isolation (angularDamping untouched) so the effect on
+# flip rate is attributable to this change alone.
+ATTITUDE_GAIN = 0.6
 
-# Tilt angle (radians) past which the drone is considered unrecoverable and
-# the episode ends. Loosened twice now: 1.05 rad (~60 deg) originally, then
-# 1.4 rad (~80 deg), now 1.5 rad (~86 deg) — nearly on its side — for even
-# more room to recover before giving up on it.
+# Tilt angle (radians) past which the drone is considered "flipped".
+# Loosened twice now: 1.05 rad (~60 deg) originally, then 1.4 rad (~80 deg),
+# now 1.5 rad (~86 deg) — nearly on its side.
 MAX_TILT_RAD = 1.5  # ~86 degrees
 
-# 3x3m field: X runs from the spawn line to the goal plane (see goal_pos in
-# _load_scene), Y is centred on the spawn/goal line. Flying outside this
-# footprint ends the episode (see _check_done) rather than being physically
-# walled off.
+# Flipping past MAX_TILT_RAD doesn't end the episode immediately — it starts
+# a grace window (see _check_done) during which the drone can still recover
+# (tilt back under MAX_TILT_RAD) or score; only if neither happens before
+# the window runs out does the episode actually terminate as "flipped" and
+# take FLIP_PENALTY. This is safe from the runaway-penalty problem a naive
+# "just remove termination" approach would hit (see PROGRESS.md's open
+# items): FLIP_PENALTY is still applied at most once per episode, at
+# whichever single step the grace window actually expires on, not once per
+# step spent tilted.
+FLIP_GRACE_STEPS = int(2.0 * PHYSICS_HZ)  # 2 seconds
+
+# 2.09x2.09x2.09m field (real room dimensions): X runs from the spawn line
+# to the goal plane, Y is centred on the spawn/goal line, Z runs floor(0)
+# to ceiling. Flying outside this footprint doesn't end the episode — the
+# boundary is a net, not a wall, see OUT_OF_BOUNDS_PENALTY in
+# _compute_reward. GOAL_Z sits at the room's vertical centre, comfortably
+# clear of both floor and ceiling.
 FIELD_X_MIN = 0.0
-FIELD_Y_HALF = 1.5
+FIELD_X_MAX = 2.09
+FIELD_Y_HALF = 2.09 / 2
+FIELD_Z_MAX = 2.09
+GOAL_Z = 2.09 / 2
+
+# See LATERAL_SCALE's comment above for why this is formula-based rather
+# than a hardcoded metre value.
+FINAL_APPROACH_X = FIELD_X_MAX * 2 / 3
+
+# Real hoop spec: 45cm outer diameter, 3.5cm border (tube) thickness.
+# _create_hoop's `radius` arg is the ring's *centreline* — the tube extends
+# tube_radius either side of it — so outer/opening radius aren't the same
+# as the centreline radius passed in, or as each other:
+#   outer radius  = centreline radius + tube_radius
+#   opening radius (what the drone must actually stay within) =
+#       centreline radius - tube_radius = outer radius - border thickness
+GOAL_OUTER_DIAMETER = 0.45
+GOAL_BORDER_THICKNESS = 0.035
+GOAL_TUBE_RADIUS = GOAL_BORDER_THICKNESS / 2
+GOAL_RING_RADIUS = GOAL_OUTER_DIAMETER / 2 - GOAL_TUBE_RADIUS
+GOAL_OPENING_RADIUS = GOAL_RING_RADIUS - GOAL_TUBE_RADIUS
 
 # Total opponents on the field, including the goalkeeper: opponent 0 always
-# patrols in front of the hoop (unchanged); the rest fly randomly around the
-# field as extra obstacles.
+# patrols in front of the hoop (unchanged); the rest are the "random"
+# fliers below.
 N_OPPONENTS = 4
-RANDOM_OPPONENT_SPEED = 0.02  # metres moved per env step toward its current waypoint
+# metres moved per env step toward its current target. Each env step is one
+# 1/240s physics tick, so this is speed-per-step * 240 in m/s. 0.02 (4.8m/s)
+# was actually faster than the striker's own measured top speed (~2.9m/s,
+# see linearDamping's comment) — not a believable chaser. Cut to well below
+# that instead of another marginal trim, so the striker can genuinely
+# outrun it rather than just delay the inevitable.
+RANDOM_OPPONENT_SPEED = 0.005  # 1.2 m/s
+# When True, the 3 non-goalkeeper opponents continuously re-target the
+# striker's current position instead of wandering to random waypoints —
+# active pursuers rather than ambient obstacles. Toggle back to False for
+# the original wandering behaviour; nothing else needs to change since
+# _update_opponents() branches on this at the target-selection step only.
+OPPONENTS_CHASE_DRONE = True
+# Without this, all 3 chasers target the drone's exact position and end up
+# stacked on top of each other (and it) once they catch up — confirmed
+# visually as a glitchy tangle of overlapping meshes, since these are
+# kinematic bodies with no collision response between each other. Each
+# chaser gets its own fixed offset, evenly spaced around the drone in the
+# X-Y plane, so they surround it at a small standoff distance instead of
+# converging on one point.
+CHASE_STANDOFF_RADIUS = 0.15
 # Random fliers stay inset from the true field edges so they don't spend all
-# their time clipped against a boundary they just re-targeted past.
-_RANDOM_OPPONENT_X_RANGE = (FIELD_X_MIN + 0.3, 2.7)
+# their time clipped against a boundary they just re-targeted past. X/Y are
+# formula-based on the field size so resizing the field can't silently push
+# these outside it; Z is a fixed band around GOAL_Z independent of field
+# size (variety in opponent altitude, not tied to room height). This is
+# their wander/waypoint range once the episode is underway — for where they
+# spawn, see _RANDOM_OPPONENT_SPAWN_X_RANGE below.
+_RANDOM_OPPONENT_X_RANGE = (FIELD_X_MIN + 0.3, FIELD_X_MAX - 0.3)
 _RANDOM_OPPONENT_Y_RANGE = (-(FIELD_Y_HALF - 0.2), FIELD_Y_HALF - 0.2)
+_RANDOM_OPPONENT_Z_RANGE = (GOAL_Z - 0.3, GOAL_Z + 0.3)
+
+# Opponents should start on their own (goal) side of the field, not right
+# next to the striker's spawn line — only affects the initial spawn position
+# in _load_scene, not ongoing wander waypoints or chase targets, which
+# already range across (or ignore, when chasing) the full field.
+_RANDOM_OPPONENT_SPAWN_X_RANGE = (FIELD_X_MAX / 2, FIELD_X_MAX - 0.3)
 
 
 class DroneSoccerEnv(gym.Env):
@@ -171,7 +273,7 @@ class DroneSoccerEnv(gym.Env):
         defaults, so this needs to be called again after every reset, not
         just once in __init__.
         """
-        p.setTimeStep(1.0 / 240.0, physicsClientId=self._client)
+        p.setTimeStep(1.0 / PHYSICS_HZ, physicsClientId=self._client)
         p.setPhysicsEngineParameter(
             numSolverIterations=100,   # high precision contact constraints
             contactBreakingThreshold=0.005,
@@ -190,6 +292,10 @@ class DroneSoccerEnv(gym.Env):
 
         self._load_scene()
         self.step_count = 0
+        # Step count at which the drone first tipped past MAX_TILT_RAD this
+        # episode, or None while upright — see _check_done()'s flip-recovery
+        # grace window.
+        self._flip_start_step = None
 
         drone_pos, _ = p.getBasePositionAndOrientation(
             self.drone_id, physicsClientId=self._client
@@ -262,8 +368,9 @@ class DroneSoccerEnv(gym.Env):
         # closest stand-in geometry).
         # Spawn with a small margin off the FIELD_X_MIN line — sitting
         # exactly on the boundary means sub-millimetre physics noise (not
-        # real movement) can trip the out-of-bounds check on step 1.
-        start_pos = [FIELD_X_MIN + 0.1, 0, 1]
+        # real movement) can trip the "behind the spawn line" bounds check
+        # on step 1.
+        start_pos = [FIELD_X_MIN + 0.1, 0, GOAL_Z]
         self.drone_id = p.loadURDF(
             DRONE_URDF, start_pos, physicsClientId=self._client
         )
@@ -271,23 +378,28 @@ class DroneSoccerEnv(gym.Env):
             self.drone_id, linkIndex=-1,
             mass=DRONE_MASS,
             localInertiaDiagonal=DRONE_INERTIA,
-            restitution=0.8,        # springy drone-soccer cage bounce
+            restitution=0.95,       # springy drone-soccer cage bounce (was 0.8 — bigger, more physical kickback on contact)
             lateralFriction=0.1,    # don't lock up against opponent frames
-            linearDamping=0.6,      # mimics Tello's VPS/optical-flow hold
+            linearDamping=0.3,      # mimics Tello's VPS/optical-flow hold, loosened (was 0.6) so top speed isn't capped as hard
             angularDamping=0.8,
             physicsClientId=self._client,
         )
 
         # Goal: a red hoop to fly through, facing down the field's X axis.
-        self.goal_pos = [3, 0, 1]
-        self.goal_radius = 0.25
-        self.goal_ids = self._create_hoop(self.goal_pos, radius=self.goal_radius)
+        # goal_radius is the scoring threshold (the opening the drone must
+        # stay within), not the hoop's visual/collision ring radius — see
+        # GOAL_OPENING_RADIUS's comment for why those differ.
+        self.goal_pos = [FIELD_X_MAX, 0, GOAL_Z]
+        self.goal_radius = GOAL_OPENING_RADIUS
+        self.goal_ids = self._create_hoop(
+            self.goal_pos, radius=GOAL_RING_RADIUS, tube_radius=GOAL_TUBE_RADIUS
+        )
 
         # Opponent 0 patrols left/right just in front of the hoop, like a
         # goalkeeper, blocking the striker's approach. opponent_ids[0] is
         # always this goalkeeper; the rest (see below) fly randomly.
         self.opponent_x = self.goal_pos[0] - 0.3
-        self.opponent_z = 1.0
+        self.opponent_z = GOAL_Z
         self.opponent_amplitude = 0.6  # metres either side of centre
         self.opponent_angular_speed = 0.05  # radians per env step
         opponent_pos = [self.opponent_x, 0, self.opponent_z]
@@ -297,7 +409,7 @@ class DroneSoccerEnv(gym.Env):
         p.changeDynamics(
             goalkeeper_id, linkIndex=-1,
             mass=DRONE_MASS, localInertiaDiagonal=DRONE_INERTIA,
-            restitution=0.8, lateralFriction=0.1,
+            restitution=0.95, lateralFriction=0.1,
             physicsClientId=self._client,
         )
         self.opponent_ids = [goalkeeper_id]
@@ -309,16 +421,18 @@ class DroneSoccerEnv(gym.Env):
         # obstacles for the policy to learn around, not something trained.
         self.random_opponents = []
         for _ in range(N_OPPONENTS - 1):
-            x = self.np_random.uniform(*_RANDOM_OPPONENT_X_RANGE)
+            # Spawn on their own half only (see _RANDOM_OPPONENT_SPAWN_X_RANGE)
+            # — not the same range used for ongoing wander/chase targets.
+            x = self.np_random.uniform(*_RANDOM_OPPONENT_SPAWN_X_RANGE)
             y = self.np_random.uniform(*_RANDOM_OPPONENT_Y_RANGE)
-            z = self.np_random.uniform(0.7, 1.3)
+            z = self.np_random.uniform(*_RANDOM_OPPONENT_Z_RANGE)
             body_id = p.loadURDF(
                 DRONE_URDF, [x, y, z], physicsClientId=self._client
             )
             p.changeDynamics(
                 body_id, linkIndex=-1,
                 mass=DRONE_MASS, localInertiaDiagonal=DRONE_INERTIA,
-                restitution=0.8, lateralFriction=0.1,
+                restitution=0.95, lateralFriction=0.1,
                 physicsClientId=self._client,
             )
             self.opponent_ids.append(body_id)
@@ -334,7 +448,7 @@ class DroneSoccerEnv(gym.Env):
         return np.array([
             self.np_random.uniform(*_RANDOM_OPPONENT_X_RANGE),
             self.np_random.uniform(*_RANDOM_OPPONENT_Y_RANGE),
-            self.np_random.uniform(0.7, 1.3),
+            self.np_random.uniform(*_RANDOM_OPPONENT_Z_RANGE),
         ], dtype=np.float64)
 
     def _create_hoop(self, center, radius=0.5, tube_radius=0.03, segments=16,
@@ -382,7 +496,8 @@ class DroneSoccerEnv(gym.Env):
 
     def _update_opponents(self):
         """Kinematically move every opponent for this step: the goalkeeper
-        sweeps left/right in front of the hoop, the rest fly randomly.
+        sweeps left/right in front of the hoop; the rest either wander to
+        random waypoints or chase the striker, per OPPONENTS_CHASE_DRONE.
 
         Like `_apply_action`'s thrust override, this bypasses real physics
         (gravity would otherwise just drop their mass to the floor) and
@@ -394,14 +509,42 @@ class DroneSoccerEnv(gym.Env):
         goalkeeper_pos = [self.opponent_x, y, self.opponent_z]
         self._place_opponent(self.opponent_ids[0], goalkeeper_pos)
 
-        for body_id, state in zip(self.opponent_ids[1:], self.random_opponents):
-            to_target = state["target"] - state["pos"]
+        if OPPONENTS_CHASE_DRONE:
+            drone_pos, _ = p.getBasePositionAndOrientation(
+                self.drone_id, physicsClientId=self._client
+            )
+            drone_pos = np.array(drone_pos, dtype=np.float64)
+            n_chasers = len(self.random_opponents)
+
+        for i, (body_id, state) in enumerate(
+            zip(self.opponent_ids[1:], self.random_opponents)
+        ):
+            # Chasing re-targets the drone's live position every step, so
+            # there's no "arrival" to detect — it just keeps closing in.
+            # Wandering keeps its persisted waypoint until it's reached.
+            # Each chaser gets its own fixed angular slot around the drone
+            # (see CHASE_STANDOFF_RADIUS) so they surround it rather than
+            # all converging on the exact same point.
+            if OPPONENTS_CHASE_DRONE:
+                chase_angle = 2 * np.pi * i / n_chasers
+                offset = np.array([
+                    CHASE_STANDOFF_RADIUS * np.cos(chase_angle),
+                    CHASE_STANDOFF_RADIUS * np.sin(chase_angle),
+                    0.0,
+                ])
+                target = drone_pos + offset
+            else:
+                target = state["target"]
+            to_target = target - state["pos"]
             dist = np.linalg.norm(to_target)
             if dist <= RANDOM_OPPONENT_SPEED:
-                # Reached (or would overshoot) this waypoint — snap to it
-                # and head somewhere new next step.
-                state["pos"] = state["target"]
-                state["target"] = self._random_opponent_waypoint()
+                # Reached (or would overshoot) this target — snap to it. In
+                # wander mode, that means picking somewhere new to head
+                # next step; in chase mode, next step's fresh drone_pos
+                # already supplies a new target, so there's nothing to pick.
+                state["pos"] = target
+                if not OPPONENTS_CHASE_DRONE:
+                    state["target"] = self._random_opponent_waypoint()
             else:
                 state["pos"] = state["pos"] + to_target / dist * RANDOM_OPPONENT_SPEED
             self._place_opponent(body_id, state["pos"])
@@ -469,14 +612,14 @@ class DroneSoccerEnv(gym.Env):
 
     def _compute_reward(self, termination_reason):
         """Potential-based progress shaping toward the hoop, plus sparse
-        score/crash/flip/collision/miss bonuses and penalties.
+        score/crash/flip/collision/miss/out-of-bounds bonuses and penalties.
 
         Shaping rewards the change in distance to the goal each step, not
         the absolute distance — see PROGRESS_SCALE's comment for why.
         _prev_dist_to_goal/_prev_lateral_dist must be updated every call
-        (including on the terminal branches, since collisions don't end the
-        episode) so the next step's delta is measured against the right
-        baseline.
+        (including on the terminal branches, since collisions and going out
+        of bounds don't end the episode) so the next step's delta is
+        measured against the right baseline.
 
         termination_reason comes from _check_done() (already computed once
         by step()) rather than being re-derived here, so this can see
@@ -497,6 +640,8 @@ class DroneSoccerEnv(gym.Env):
             reward = FLIP_PENALTY
         elif self._collided_with_opponent():
             reward = COLLISION_PENALTY
+        elif self._out_of_bounds(drone_pos):
+            reward = OUT_OF_BOUNDS_PENALTY
         elif termination_reason == "scored":
             reward = SCORE_REWARD
         elif termination_reason == "missed_goal":
@@ -531,13 +676,33 @@ class DroneSoccerEnv(gym.Env):
             for opp_id in self.opponent_ids
         )
 
+    def _out_of_bounds(self, drone_pos):
+        """True if the drone is past the field's net boundary (behind the
+        spawn line, off either side, or above the ceiling). The net doesn't
+        physically stop it — see OUT_OF_BOUNDS_PENALTY — so this can be
+        true for many consecutive steps, not just a one-off event.
+        """
+        return (
+            drone_pos[0] < FIELD_X_MIN
+            or abs(drone_pos[1]) > FIELD_Y_HALF
+            or drone_pos[2] > FIELD_Z_MAX
+        )
+
     def _check_done(self):
         """Episode termination: scored, crashed, or flown past the hoop's plane.
 
         Returns a reason string once terminated ("crashed", "flipped",
-        "scored", "missed_goal", "out_of_bounds"), or None while still
-        in-flight — lets callers (step()'s info dict, watch.py, logging)
-        report why an episode ended, not just that it did.
+        "scored", "missed_goal"), or None while still in-flight — lets
+        callers (step()'s info dict, watch.py, logging) report why an
+        episode ended, not just that it did. Going out of bounds does NOT
+        terminate — the field boundary is a net, not a wall, see
+        OUT_OF_BOUNDS_PENALTY in _compute_reward.
+
+        Tilting past MAX_TILT_RAD doesn't terminate on its own either — see
+        FLIP_GRACE_STEPS's comment. It starts (or continues) a grace window
+        below instead, and only falls through to an actual "flipped"
+        termination once that window is exhausted without the drone
+        recovering or scoring first.
         """
         drone_pos, drone_orn = p.getBasePositionAndOrientation(
             self.drone_id, physicsClientId=self._client
@@ -548,18 +713,19 @@ class DroneSoccerEnv(gym.Env):
 
         drone_euler = p.getEulerFromQuaternion(drone_orn)
         if abs(drone_euler[0]) > MAX_TILT_RAD or abs(drone_euler[1]) > MAX_TILT_RAD:
-            return "flipped"
+            if self._flip_start_step is None:
+                self._flip_start_step = self.step_count
+            elif self.step_count - self._flip_start_step >= FLIP_GRACE_STEPS:
+                return "flipped"
+        else:
+            self._flip_start_step = None  # recovered — grace window clears
 
         # Terminate once the drone has flown past the hoop's X plane at all,
         # whether it threaded the opening (see _scored, used for the score
-        # bonus in _compute_reward) or missed wide — either way the shot is over.
+        # bonus in _compute_reward) or missed wide — either way the shot is
+        # over, including mid-flip: scoring during the grace window counts.
         if drone_pos[0] >= self.goal_pos[0]:
             return "scored" if self._scored(drone_pos) else "missed_goal"
-
-        # Out of bounds: flew behind the spawn line or off the side of the
-        # 3x3m field. No physical wall — flying out just ends the episode.
-        if drone_pos[0] < FIELD_X_MIN or abs(drone_pos[1]) > FIELD_Y_HALF:
-            return "out_of_bounds"
 
         return None
 

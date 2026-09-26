@@ -21,9 +21,36 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from drone_soccer_env import DroneSoccerEnv
 
-# v1 and v3 are the two prior fresh-start runs (see PROGRESS.md) — this must
-# be changed before running again, or it will silently overwrite one of them.
-OUTPUT_MODEL = "drone_soccer_ppo_fresh"
+# Naming convention (see PROGRESS.md): vX.0 = fresh start, vX.1/.2/... =
+# later stages on that lineage. X changes only for a fresh start under
+# different core physics (ATTITUDE_GAIN so far); the stage number bumps for
+# continuations that don't change physics. This must be changed before
+# running again, or it will silently overwrite an existing model.
+#
+# v2.0: second lineage, ATTITUDE_GAIN=0.6 (v1.x was 0.4) — fine-tuning
+# v1.4 (the v1.x lineage's best) under the new gain (v1.5_abandoned, +4M
+# steps) fell well short of v1.4's 27.3% and showed no sign of closing the
+# gap by the end (best checkpoint 11.3%, final save even lower at 9.3%),
+# suggesting the fine-tuned policy was stuck adapting rather than slowly
+# converging. Testing from scratch instead: the reward shaping
+# (FLIP_PENALTY, MISS_PENALTY, LATERAL_SCALE, ent_coef=0.001) is already
+# mature at this point, unlike when v1.0 started, so this shouldn't need to
+# re-discover any of that — just learn flight/navigation under the new
+# torque response without v1.4's 0.4-tuned habits to unlearn first.
+#
+# v2.0 replaced (not bumped to v3.0): its first attempt never got
+# meaningful training (stopped twice, max 500k/10M steps) before the env
+# changed further underneath it — DRONE_MASS to the real Tello EDU spec
+# (100g incl. cage, was 105g), real hoop dimensions (45cm outer / 3.5cm
+# border, ring vs opening radius properly separated), field resized
+# 3x3m -> 2.09x2.09x2.09m (also adds a ceiling that didn't exist before),
+# and out_of_bounds changed from terminal to a per-step penalty (the
+# boundary is a net, not a wall). Reusing the v2.0 name and starting over
+# rather than treating this as a new lineage, per instruction — the old
+# 500k-step v2.0 checkpoints are gone (see PROGRESS.md for the historical
+# note); this run's own checkpoints will land on the same step-count
+# filenames from scratch.
+OUTPUT_MODEL = "drone_soccer_ppo_v2.0"
 
 # TF32 matmuls: free precision-for-speed tradeoff on Ampere+/Blackwell GPUs,
 # and RL gradients are noisy enough that the reduced precision doesn't matter.
@@ -176,14 +203,22 @@ if __name__ == "__main__":
     )
 
     model.learn(
-        total_timesteps=1_000_000,
+        total_timesteps=4_000_000,
         callback=CallbackList([
             ProgressPrintCallback(print_freq=100_000),
             TerminationReasonCallback(report_freq=50_000),
             checkpoint_callback,
             eval_callback,
         ]),
+        tb_log_name="v2.0",
     )
-    model.save(OUTPUT_MODEL)
+    # SB3's save() only appends ".zip" if the path has no extension at all —
+    # for a dotted name like "v2.0" it sees ".0" and assumes one's already
+    # there, silently saving with no extension at all (hit this for real:
+    # drone_soccer_ppo_v2.0's final save came out as a zip archive literally
+    # named "drone_soccer_ppo_v2.0", not "...v2.0.zip", so watch.py's *.zip
+    # glob couldn't find it). Passing ".zip" explicitly sidesteps the
+    # ambiguity regardless of how many dots OUTPUT_MODEL has.
+    model.save(f"{OUTPUT_MODEL}.zip")
 
     print(f"Training complete. Model saved to {OUTPUT_MODEL}.zip")
