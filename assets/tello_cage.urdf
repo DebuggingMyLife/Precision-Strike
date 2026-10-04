@@ -1,0 +1,103 @@
+<?xml version="1.0"?>
+<!--
+  Drone-soccer cage body: replaces cf2x.urdf's rotor-frame stand-in shape
+  with a physically-accurate spherical protective cage (real drone soccer
+  drones fly inside one of these) for the base_link's visual/collision
+  geometry and inertia. The <properties> tag below is inert (this project's
+  DRONE_KF/DRONE_KM/DRONE_THRUST2WEIGHT are separate Python constants in
+  drone_soccer_env.py, not parsed from here) — kept only for documentation
+  parity with cf2x.urdf.
+
+  prop0..3_link below are copied verbatim from cf2x.urdf (same 0.0397m rotor
+  arm) since motor-mixing geometry is independent of the outer body shape —
+  drone_soccer_env.py's _apply_action applies each rotor's thrust at its own
+  prop_link so differential thrust still produces roll/pitch torque. These
+  are zero-mass dummy links with a fixed (identity-origin) joint to
+  base_link; PyBullet positions each one's *inertial* origin offset (not
+  the joint origin) as its LINK_FRAME reference point, which is what
+  actually gives the lever arm — do not add a joint <origin> here or it
+  will double up the offset.
+-->
+<robot name="tello_cage">
+
+  <properties arm="0.0397" kf="3.16e-10" km="7.94e-12" thrust2weight="1.7" />
+
+  <link name="base_link">
+    <inertial>
+      <!-- Overridden at load time by drone_soccer_env.py's changeDynamics
+           call (DRONE_MASS / DRONE_INERTIA, the spherical-shell formula) —
+           these are just sane standalone defaults if loaded on their own. -->
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.1"/>
+      <inertia ixx="0.00066667" ixy="0" ixz="0"
+               iyy="0.00066667" iyz="0"
+               izz="0.00066667"/>
+    </inertial>
+
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.1"/>
+      </geometry>
+      <material name="cage_translucent">
+        <color rgba="0.9 0.45 0.1 0.35"/>
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.1"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="prop0_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.028 -0.028 0"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+  </link>
+  <joint name="prop0_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="prop0_link"/>
+  </joint>
+
+  <link name="prop1_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.028 -0.028 0"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+  </link>
+  <joint name="prop1_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="prop1_link"/>
+  </joint>
+
+  <link name="prop2_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.028 0.028 0"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+  </link>
+  <joint name="prop2_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="prop2_link"/>
+  </joint>
+
+  <link name="prop3_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.028 0.028 0"/>
+      <mass value="0"/>
+      <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+    </inertial>
+  </link>
+  <joint name="prop3_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="prop3_link"/>
+  </joint>
+
+</robot>

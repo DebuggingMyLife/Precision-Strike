@@ -16,11 +16,12 @@ from collections import Counter
 from sb3_contrib import RecurrentPPO
 
 from drone_soccer_env import DroneSoccerEnv
+from yolo_detector import YoloDetector
 
 
 def evaluate(model_path, n_episodes=150, seed=0):
     model = RecurrentPPO.load(model_path, device="cpu")
-    env = DroneSoccerEnv()
+    env = DroneSoccerEnv(detector=YoloDetector())
 
     reasons = Counter()
     for ep in range(n_episodes):

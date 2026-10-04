@@ -19,6 +19,7 @@ import time
 from sb3_contrib import RecurrentPPO
 
 from drone_soccer_env import DroneSoccerEnv
+from yolo_detector import YoloDetector
 
 
 def find_latest_model():
@@ -36,7 +37,7 @@ model_path = find_latest_model()
 print(f"Loading {model_path}")
 model = RecurrentPPO.load(model_path)
 
-env = DroneSoccerEnv(render_mode="human")
+env = DroneSoccerEnv(detector=YoloDetector(), render_mode="human", chase_probability=1.0)
 obs, info = env.reset()
 
 lstm_states = None
@@ -44,12 +45,8 @@ episode_start = True
 episode_num = 1
 
 for _ in range(5000):
-    # deterministic=False on purpose: this policy's mean action alone
-    # flips almost every episode, but sampling from its actual learned
-    # distribution (what training itself used) is what actually scores.
-    # deterministic=True here would show a misleadingly broken drone.
-    # (The ~70% figure once quoted here was from the old single-opponent
-    # env's v2 model — see PROGRESS.md for current scored-rate numbers.)
+    # deterministic=False: this policy's sampled actions score far better
+    # than its mean action, so deterministic=True would look misleadingly broken.
     action, lstm_states = model.predict(
         obs, state=lstm_states, episode_start=episode_start, deterministic=False
     )
