@@ -1,0 +1,5 @@
+path: C:\Users\Oat\OneDrive - UTS\Spring 2026\Reinforcement Learning\A3\Precision-Strike\detector_dataset
+train: images/train
+val: images/val
+names:
+  0: defender

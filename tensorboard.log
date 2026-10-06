@@ -1,0 +1,6 @@
+TensorFlow installation not found - running with reduced feature set.
+Serving TensorBoard on localhost; to expose to the network, use a proxy or pass --bind_all
+TensorBoard 2.21.0 at http://localhost:6006/ (Press CTRL+C to quit)
+W1003 19:00:59.802279  9472 plugin_event_multiplexer.py:267] Deleting accumulator 'v4.0_2'
+W1003 19:00:59.802279  9472 plugin_event_multiplexer.py:267] Deleting accumulator 'v4.0_3'
+W1003 19:00:59.802279  9472 plugin_event_multiplexer.py:267] Deleting accumulator 'v4.0_1'

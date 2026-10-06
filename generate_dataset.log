@@ -1,0 +1,13 @@
+pybullet build time: Sep 16 2026 22:14:57
+[train] 500/4000 frames (431 with defender visible)
+[train] 1000/4000 frames (785 with defender visible)
+[train] 1500/4000 frames (959 with defender visible)
+[train] 2000/4000 frames (1262 with defender visible)
+[train] 2500/4000 frames (1521 with defender visible)
+[train] 3000/4000 frames (1803 with defender visible)
+[train] 3500/4000 frames (1982 with defender visible)
+[train] 4000/4000 frames (2189 with defender visible)
+[train] done: 4000 frames, 2189 with defender visible (54.7%)
+[val] 500/500 frames (242 with defender visible)
+[val] done: 500 frames, 242 with defender visible (48.4%)
+Wrote detector_dataset\dataset.yaml

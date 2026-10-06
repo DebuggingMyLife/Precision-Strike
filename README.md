@@ -1,8 +1,11 @@
-# Drone Soccer RL Starter
+# Drone Soccer RL — Precision Strike
 
-A minimal skeleton to get you moving: a PyBullet-backed Gymnasium environment,
-wired up for drone state + camera/depth-based opponent detection, and a
-RecurrentPPO training script.
+A PyBullet/Gymnasium environment for a drone soccer striker task, trained
+with RecurrentPPO (`sb3_contrib`). The drone must fly from a spawn line
+through a hoop, avoiding a patrolling goalkeeper and 3 randomly-moving
+opponents. See **PROGRESS.md** for the full development history, reward
+design decisions, and model lineage (`v3` baseline through `v7_best`,
+currently the best model).
 
 ## Setup
 
@@ -15,58 +18,65 @@ compiles it from source — this requires the
 [MSVC Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
 (C++ workload) to be installed first, and can take 30-60+ minutes.
 
-**GPU training:** `pip install -r requirements.txt` installs the CPU-only
-build of torch on Windows (PyPI's default Windows wheel has no CUDA, unlike
-Linux). For GPU training, reinstall torch from PyTorch's CUDA index after:
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130 --force-reinstall
-```
-
-Check it worked with `python -c "import torch; print(torch.cuda.is_available())"`.
+**GPU:** not needed — see PROGRESS.md's hardware notes. This policy is
+small enough that `device="cpu"` is actually faster than GPU (benchmarked
+1.29x), so both `train.py` and `train_continue.py` use it by default.
 
 ## Files
 
-- **drone_soccer_env.py** — the environment. Run it directly for a quick
-  sanity check (`python drone_soccer_env.py`) — it steps a few random actions
-  using ground-truth opponent position (no detector needed yet) so you can
-  confirm the sim, action application, and reward loop all connect.
-- **train.py** — trains RecurrentPPO on the env. Uses `DummyVecEnv` by default
-  (easier to debug); switch to `SubprocVecEnv` once things are stable for
-  real parallelism.
+- **drone_soccer_env.py** — the environment.
+- **train.py** — trains a brand-new `RecurrentPPO` model from scratch.
+- **train_continue.py** — continues training an existing model. This is
+  what you want most of the time (see below).
+- **watch.py** — loads a model and flies it live in a GUI window:
+  `python watch.py <path-to-model.zip>`.
+- **PROGRESS.md** — full history: what changed at each stage, why, and what
+  the actual results were (including cases where a "final" checkpoint
+  regressed from a mid-run peak — see below).
 
-## What's a placeholder vs. what's real
+## Continuing training
 
-**Already wired up (should work as-is):**
-- Gymnasium `reset()`/`step()` loop
-- Camera rendering + PyBullet depth buffer → real-world distance conversion
-- Observation vector assembly (drone state + detection features)
-- RecurrentPPO training loop
+`train_continue.py` has `SOURCE_MODEL`/`OUTPUT_MODEL`/`ADDITIONAL_TIMESTEPS`
+constants at the top — check these point at the model you actually want to
+build on (see PROGRESS.md's model lineage table for the current best) before
+running:
 
-**You need to fill in:**
-- `_load_scene()` — swap the placeholder sphere for a real drone URDF (check
-  `gym-pybullet-drones` on GitHub for a maintained one) plus field/goal geometry
-- `_apply_action()` — replace the simple force application with real per-motor
-  thrust → force/torque mapping for a quadrotor
-- `_compute_reward()` — replace the placeholder distance-based reward with
-  your actual scoring task reward
-- `_check_done()` — add real termination conditions (goal scored, drone
-  crashed, out of bounds, etc.)
-- Plug in your trained detector: `DroneSoccerEnv(detector=your_yolo_model)` —
-  the detector should be callable as `detector(rgb_image)` returning a list of
-  `(x1, y1, x2, y2, confidence, class)` boxes
+```bash
+python train_continue.py
+```
 
-## Suggested order
+**Important — always verify the result before trusting it.** PPO isn't
+guaranteed to improve monotonically: a run's final save can be *worse* than
+a checkpoint from partway through. Every continuation run already has an
+`EvalCallback` that tracks the best-scoring checkpoint independently
+(saved to `checkpoints/best_model_continued_<name>/best_model.zip`) — after
+a run finishes, compare its final save against that best checkpoint with a
+matched evaluation (see `PROGRESS.md`'s "PPO's non-monotonic regression"
+note for exactly how `v6` and `v7` were caught doing this, while `v4`/`v5`
+were fine). If the mid-run checkpoint wins, copy it to a clearly-named file
+(e.g. `drone_soccer_ppo_v8_best.zip`) rather than using the raw final save,
+and update `PROGRESS.md` + `.gitignore` accordingly.
 
-1. Get `python drone_soccer_env.py` running with the placeholder scene (verifies
-   your PyBullet install and the env plumbing).
-2. Fill in `_load_scene()` with a real drone URDF, still using placeholder
-   reward/action logic — confirm it loads and simulates correctly.
-3. Fill in `_apply_action()` with real motor dynamics.
-4. Fill in `_compute_reward()` and `_check_done()` for your actual task.
-5. Run `train.py` with vanilla PPO first (swap `RecurrentPPO` →
-   `PPO`/`MlpPolicy` temporarily) to validate the reward signal before
-   adding recurrence.
-6. Switch back to RecurrentPPO once the vanilla baseline is learning
-   something sensible.
-7. Plug in your object detector, replacing the ground-truth fallback.
+Each new continuation run should also get its own unique
+`name_prefix`/`tb_log_name`/eval paths (bump the version number in each) —
+reusing a previous run's names will silently overwrite its checkpoints or
+merge unrelated runs' curves in TensorBoard. `train_continue.py`'s comments
+walk through why.
+
+## Watching a model fly
+
+```bash
+python watch.py drone_soccer_ppo_v7_best.zip
+```
+
+Opens a live GUI window and prints each episode's outcome
+(scored/flipped/missed/etc.) to the console.
+
+## Viewing training curves
+
+```bash
+python -m tensorboard.main --logdir tb_logs
+```
+
+Then open http://localhost:6006/. Runs are labeled `Baseline`, `Stage_1`
+through `Stage_5`, matching the stages described in PROGRESS.md.
