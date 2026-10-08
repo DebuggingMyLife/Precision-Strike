@@ -15,7 +15,7 @@ Run:
 """
 
 import torch
-from sb3_contrib import RecurrentPPO
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import (
     CallbackList,
     CheckpointCallback,
@@ -28,8 +28,11 @@ from train import ProgressPrintCallback, TerminationReasonCallback, make_env
 torch.set_float32_matmul_precision("high")
 torch.set_num_threads(1)
 
-SOURCE_MODEL = "drone_soccer_ppo_v4.0"
-OUTPUT_MODEL = "drone_soccer_ppo_v4.1"
+SOURCE_MODEL = "drone_soccer_plainppo_v1.0"
+OUTPUT_MODEL = "drone_soccer_plainppo_v1.1"
+# Full "plainppo_vX.Y" suffix, not just "vX.Y", so these log/eval paths
+# can't collide with the RecurrentPPO lineage's (e.g. its own v1.1).
+RUN_NAME = OUTPUT_MODEL.removeprefix("drone_soccer_")
 # Diagnostic budget (not a full commitment) — v4.0's trend was volatile
 # (oscillated 9-70% scored over its last 2M steps) and trained under the
 # since-fixed defender-standoff bug (see PROGRESS.md), so check this actually
@@ -42,7 +45,7 @@ if __name__ == "__main__":
 
     env = SubprocVecEnv([make_env() for _ in range(N_ENVS)])
 
-    model = RecurrentPPO.load(SOURCE_MODEL, env=env, device="cpu")
+    model = PPO.load(SOURCE_MODEL, env=env, device="cpu")
 
     checkpoint_callback = CheckpointCallback(
         save_freq=max(50_000 // N_ENVS, 1),
@@ -53,8 +56,8 @@ if __name__ == "__main__":
     eval_env = DummyVecEnv([make_env()])
     eval_callback = EvalCallback(
         eval_env,
-        best_model_save_path=f"./checkpoints/best_model_{OUTPUT_MODEL.split('_')[-1]}/",
-        log_path=f"./eval_logs_{OUTPUT_MODEL.split('_')[-1]}/",
+        best_model_save_path=f"./checkpoints/best_model_{RUN_NAME}/",
+        log_path=f"./eval_logs_{RUN_NAME}/",
         eval_freq=max(50_000 // N_ENVS, 1),
         n_eval_episodes=10,
         deterministic=False,  # this policy's sampled actions score better than its mean
@@ -69,7 +72,7 @@ if __name__ == "__main__":
             eval_callback,
         ]),
         reset_num_timesteps=False,
-        tb_log_name=OUTPUT_MODEL.split("_")[-1],
+        tb_log_name=RUN_NAME,
     )
     model.save(f"{OUTPUT_MODEL}.zip")
 

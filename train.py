@@ -1,13 +1,14 @@
 """
 Fresh-start training script for the drone soccer striker task using
-RecurrentPPO. See train_continue.py to continue an existing model instead.
+plain (non-recurrent) PPO, for comparison against RecurrentPPO. See
+train_continue.py to continue an existing model instead.
 
 Run:
     python train.py
 """
 
 import torch
-from sb3_contrib import RecurrentPPO
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import (
     BaseCallback,
     CallbackList,
@@ -24,7 +25,9 @@ from drone_soccer_env import CHASE_PROBABILITY, DroneSoccerEnv
 # state), both breaking observation-space compatibility with every prior
 # checkpoint. See PROGRESS.md for the full history this naming convention
 # tracks.
-OUTPUT_MODEL = "drone_soccer_ppo_v4.0"
+# plainppo: separate lineage from the RecurrentPPO models (drone_soccer_ppo_v*),
+# same env and hyperparameters but no LSTM, so the two can be compared directly.
+OUTPUT_MODEL = "drone_soccer_plainppo_v1.0"
 
 torch.set_float32_matmul_precision("high")  # free speed, RL gradients are noisy anyway
 torch.set_num_threads(1)  # leave cores free for the env subprocesses
@@ -121,12 +124,11 @@ if __name__ == "__main__":
     env = SubprocVecEnv([make_env(chase_probability=0.0) for _ in range(N_ENVS)])
 
     policy_kwargs = dict(
-        lstm_hidden_size=128,
         net_arch=dict(pi=[64, 64], vf=[64, 64]),
     )
 
-    model = RecurrentPPO(
-        "MlpLstmPolicy",
+    model = PPO(
+        "MlpPolicy",
         env,
         n_steps=512,
         batch_size=256,
@@ -170,7 +172,7 @@ if __name__ == "__main__":
             checkpoint_callback,
             eval_callback,
         ]),
-        tb_log_name="v4.0",
+        tb_log_name="plainppo_v1.0",
     )
     # SB3's save() misreads a dotted name's trailing ".N" as an existing
     # extension, so ".zip" must be passed explicitly.

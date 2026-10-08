@@ -13,29 +13,23 @@ Or import evaluate() directly for use in other scripts.
 import sys
 from collections import Counter
 
-from sb3_contrib import RecurrentPPO
+from stable_baselines3 import PPO
 
 from drone_soccer_env import DroneSoccerEnv
 from yolo_detector import YoloDetector
 
 
 def evaluate(model_path, n_episodes=150, seed=0):
-    model = RecurrentPPO.load(model_path, device="cpu")
+    model = PPO.load(model_path, device="cpu")
     env = DroneSoccerEnv(detector=YoloDetector())
 
     reasons = Counter()
     for ep in range(n_episodes):
         obs, info = env.reset(seed=seed + ep)
-        lstm_states = None
-        episode_start = True
         for _ in range(1000):
-            action, lstm_states = model.predict(
-                obs, state=lstm_states, episode_start=episode_start,
-                deterministic=False,
-            )
+            action, _ = model.predict(obs, deterministic=False)
             obs, reward, terminated, truncated, info = env.step(action)
-            episode_start = terminated or truncated
-            if episode_start:
+            if terminated or truncated:
                 reasons[info.get("termination_reason")] += 1
                 break
     env.close()
