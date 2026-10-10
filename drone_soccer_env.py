@@ -108,16 +108,18 @@ GOAL_OPENING_RADIUS = GOAL_RING_RADIUS - GOAL_TUBE_RADIUS
 # Single defender: spawns near the goal and, per episode, either intercepts
 # the striker directly or wanders to random waypoints (chosen at reset so
 # the policy can't rely on knowing its behavior in advance).
-OPPONENT_SPEED_MPS = 1.5  # capped below the striker's own top speed
+OPPONENT_SPEED_MPS = 2.92  # capped below the striker's own top speed
 # Target/eval-time value; train.py ramps a from-scratch policy up to this
 # via ChaseCurriculumCallback instead of using it from step 0.
 CHASE_PROBABILITY = 0.5
-DEFENDER_SPAWN_POS = (FIELD_X_MAX - 0.3, 0.0, GOAL_Z)
 # Wander-mode waypoint range; inset from the true field edges so it isn't
 # spent clipped against a boundary it just re-targeted past.
 _DEFENDER_X_RANGE = (FIELD_X_MIN + 0.3, FIELD_X_MAX - 0.3)
 _DEFENDER_Y_RANGE = (-(FIELD_Y_HALF - 0.2), FIELD_Y_HALF - 0.2)
 _DEFENDER_Z_RANGE = (GOAL_Z - 0.3, GOAL_Z + 0.3)
+# Spawn is randomized per episode (was fixed just in front of the goal) but
+# kept to the defender's own half, so it never starts on top of the striker.
+_DEFENDER_SPAWN_X_RANGE = (FIELD_X_MAX / 2, FIELD_X_MAX - 0.3)
 
 
 class DroneSoccerEnv(gym.Env):
@@ -273,10 +275,14 @@ class DroneSoccerEnv(gym.Env):
         )
 
         self._defender_chasing = self.np_random.random() < self.chase_probability
-        self._defender_pos = np.array(DEFENDER_SPAWN_POS, dtype=np.float64)
+        self._defender_pos = np.array([
+            self.np_random.uniform(*_DEFENDER_SPAWN_X_RANGE),
+            self.np_random.uniform(*_DEFENDER_Y_RANGE),
+            self.np_random.uniform(*_DEFENDER_Z_RANGE),
+        ], dtype=np.float64)
         self._defender_target = self._defender_waypoint()
         self.opponent_id = p.loadURDF(
-            DRONE_URDF, DEFENDER_SPAWN_POS, physicsClientId=self._client
+            DRONE_URDF, self._defender_pos.tolist(), physicsClientId=self._client
         )
         p.changeDynamics(
             self.opponent_id, linkIndex=-1,

@@ -33,10 +33,7 @@ OUTPUT_MODEL = "drone_soccer_plainppo_v1.1"
 # Full "plainppo_vX.Y" suffix, not just "vX.Y", so these log/eval paths
 # can't collide with the RecurrentPPO lineage's (e.g. its own v1.1).
 RUN_NAME = OUTPUT_MODEL.removeprefix("drone_soccer_")
-# Diagnostic budget (not a full commitment) — v4.0's trend was volatile
-# (oscillated 9-70% scored over its last 2M steps) and trained under the
-# since-fixed defender-standoff bug (see PROGRESS.md), so check this actually
-# climbs under clean signal before extending further.
+# Set this to however many more steps plainppo_v1.0 should train for.
 ADDITIONAL_TIMESTEPS = 2_000_000
 
 

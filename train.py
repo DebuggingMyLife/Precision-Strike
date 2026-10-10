@@ -20,13 +20,10 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from drone_soccer_env import CHASE_PROBABILITY, DroneSoccerEnv
 
-# v4.0: fourth lineage — single defender (was goalkeeper + 3 fliers) and a
-# required YOLO detector (was optional, defaulting to ground-truth opponent
-# state), both breaking observation-space compatibility with every prior
-# checkpoint. See PROGRESS.md for the full history this naming convention
-# tracks.
 # plainppo: separate lineage from the RecurrentPPO models (drone_soccer_ppo_v*),
-# same env and hyperparameters but no LSTM, so the two can be compared directly.
+# trained on the same env as RecurrentPPO v4.0 (single defender + YOLO
+# detector) with the same hyperparameters but no LSTM, so the two can be
+# compared directly.
 OUTPUT_MODEL = "drone_soccer_plainppo_v1.0"
 
 torch.set_float32_matmul_precision("high")  # free speed, RL gradients are noisy anyway
@@ -114,9 +111,11 @@ class TerminationReasonCallback(BaseCallback):
 
 
 if __name__ == "__main__":
-    N_ENVS = 12  # one process per env
-    TOTAL_TIMESTEPS = 5_000_000
-    CHASE_CURRICULUM_END_STEP = int(TOTAL_TIMESTEPS * 0.7)  # full difficulty by 70% through
+    N_ENVS = 12  # one process per env; matches RecurrentPPO v4.0 for a fair comparison
+    TOTAL_TIMESTEPS = 12_000_000  # ~17-18h on a 7800X3D (~223-239 steps/s + evals)
+    # Fixed at RecurrentPPO v4.0's value (70% of its 5M), not 70% of this run's
+    # total, so both reach full difficulty at the same step for a fair comparison.
+    CHASE_CURRICULUM_END_STEP = 3_500_000
 
     # Training envs start at chase_probability=0 (pure wander); the eval env
     # below stays at the CHASE_PROBABILITY default so EvalCallback measures
