@@ -644,7 +644,11 @@ class DroneSoccerEnv(gym.Env):
             self.img_size, self.img_size, view_matrix, proj_matrix,
             renderer=p.ER_TINY_RENDERER, physicsClientId=self._client,
         )
-        rgb = np.reshape(rgb_raw, (self.img_size, self.img_size, 4))[:, :, :3]
+        # Some PyBullet builds return Python tuples rather than uint8 arrays.
+        # Preserve the pixel values while making the RGB image valid for PIL/CV.
+        rgb = np.asarray(rgb_raw, dtype=np.uint8).reshape(
+            self.img_size, self.img_size, 4
+        )[:, :, :3]
         depth = np.reshape(depth_raw, (self.img_size, self.img_size))
         return rgb, depth
 

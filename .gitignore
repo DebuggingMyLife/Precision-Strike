@@ -24,6 +24,9 @@ tensorboard/
 yolo*.pt
 *.onnx
 
+# Raw live-camera datasets (session metadata remains beside the images)
+/datasets/tello_raw/
+
 # OS / editor
 .DS_Store
 Thumbs.db

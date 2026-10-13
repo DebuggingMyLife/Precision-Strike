@@ -1,7 +1,7 @@
 import pygame
 from djitellopy import Tello
 
-CONTROL = 20  # Gentle initial RC input; each channel accepts -100 to 100.
+CONTROL = 20 
 
 pygame.init()
 window = pygame.display.set_mode((640, 180))
