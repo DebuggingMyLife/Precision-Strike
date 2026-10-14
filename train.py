@@ -14,12 +14,12 @@ from drone_soccer_env import CHASE_PROBABILITY, DroneSoccerEnv
 OUTPUT_MODEL = "drone_soccer_ppo_v4.0"
 
 torch.set_float32_matmul_precision("high")
-torch.set_num_threads(1)  # leave cores for env subprocesses
+torch.set_num_threads(1) 
 
 
 def make_env(chase_probability=CHASE_PROBABILITY):
     def _init():
-        from yolo_detector import YoloDetector  # loaded per subprocess
+        from yolo_detector import YoloDetector 
         env = DroneSoccerEnv(detector=YoloDetector(), chase_probability=chase_probability)
         return Monitor(env)
     return _init
@@ -94,7 +94,6 @@ if __name__ == "__main__":
     TOTAL_TIMESTEPS = 5_000_000
     CHASE_CURRICULUM_END_STEP = int(TOTAL_TIMESTEPS * 0.7)
 
-    # Training starts with no chasing; eval env uses full difficulty
     env = SubprocVecEnv([make_env(chase_probability=0.0) for _ in range(N_ENVS)])
 
     model = RecurrentPPO(
@@ -112,10 +111,9 @@ if __name__ == "__main__":
         ),
         verbose=1,
         tensorboard_log="./tb_logs/",
-        device="cpu",  # faster than cuda for this small policy
+        device="cpu", 
     )
 
-    # Frequencies are per vec-env step, so ~50k timesteps
     checkpoint_callback = CheckpointCallback(
         save_freq=max(50_000 // N_ENVS, 1),
         save_path="./checkpoints/",
@@ -142,7 +140,6 @@ if __name__ == "__main__":
         ]),
         tb_log_name="v4.0",
     )
-    # Explicit .zip: SB3 treats a dotted name's ".0" as an extension
     model.save(f"{OUTPUT_MODEL}.zip")
 
     print(f"Training complete. Model saved to {OUTPUT_MODEL}.zip")
