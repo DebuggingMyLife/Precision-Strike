@@ -1,10 +1,4 @@
-"""
-Fresh-start training script for the drone soccer striker task using
-RecurrentPPO. See train_continue.py to continue an existing model instead.
-
-Run:
-    python train.py
-"""
+"""Fresh-start RecurrentPPO training. Usage: python train.py"""
 
 import torch
 from sb3_contrib import RecurrentPPO
@@ -19,53 +13,41 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from drone_soccer_env import CHASE_PROBABILITY, DroneSoccerEnv
 
-# v4.0: fourth lineage — single defender (was goalkeeper + 3 fliers) and a
-# required YOLO detector (was optional, defaulting to ground-truth opponent
-# state), both breaking observation-space compatibility with every prior
-# checkpoint. See PROGRESS.md for the full history this naming convention
-# tracks.
 OUTPUT_MODEL = "drone_soccer_ppo_v4.0"
 
-torch.set_float32_matmul_precision("high")  # free speed, RL gradients are noisy anyway
-torch.set_num_threads(1)  # leave cores free for the env subprocesses
+torch.set_float32_matmul_precision("high")
+torch.set_num_threads(1)  # leave cores for env subprocesses
 
 
-def make_env(render_mode=None, chase_probability=CHASE_PROBABILITY):
+def make_env(chase_probability=CHASE_PROBABILITY):
     def _init():
-        from yolo_detector import YoloDetector  # loaded per-subprocess, not pickled in
-        env = DroneSoccerEnv(
-            detector=YoloDetector(), render_mode=render_mode,
-            chase_probability=chase_probability,
-        )
-        return Monitor(env)  # Monitor is what lets SB3 log ep_rew_mean/ep_len_mean
+        from yolo_detector import YoloDetector  # loaded per subprocess
+        env = DroneSoccerEnv(detector=YoloDetector(), chase_probability=chase_probability)
+        return Monitor(env)
     return _init
 
 
 class ChaseCurriculumCallback(BaseCallback):
-    """Ramps the training envs' chase_probability linearly from 0 at step 0
-    to `end_prob` by `end_step`, instead of exposing a trained-from-scratch
-    policy to an interceptor immediately — see PROGRESS.md's v3.0_abandoned
-    entries for what happens when that's skipped."""
+    """Ramps chase_probability linearly from 0 to end_prob by end_step."""
 
     def __init__(self, end_step, end_prob=CHASE_PROBABILITY, update_freq=10_000, verbose=0):
         super().__init__(verbose)
         self.end_step = end_step
         self.end_prob = end_prob
         self.update_freq = update_freq
-        self._last_update = -update_freq  # force an update on the first call
+        self._last_update = -update_freq  # update on first call
 
     def _on_step(self):
         if self.num_timesteps - self._last_update >= self.update_freq:
             self._last_update = self.num_timesteps
-            progress = min(1.0, self.num_timesteps / self.end_step)
-            prob = progress * self.end_prob
+            prob = min(1.0, self.num_timesteps / self.end_step) * self.end_prob
             self.training_env.env_method("set_chase_probability", prob)
             self.logger.record("curriculum/chase_probability", prob)
         return True
 
 
 class ProgressPrintCallback(BaseCallback):
-    """Prints a progress line every `print_freq` timesteps."""
+    """Prints a progress line every print_freq timesteps."""
 
     def __init__(self, print_freq=100_000, verbose=0):
         super().__init__(verbose)
@@ -80,8 +62,7 @@ class ProgressPrintCallback(BaseCallback):
 
 
 class TerminationReasonCallback(BaseCallback):
-    """Logs the breakdown of why episodes end (from info["termination_reason"])
-    every `report_freq` timesteps, to tensorboard and stdout."""
+    """Logs the termination_reason breakdown every report_freq timesteps."""
 
     def __init__(self, report_freq=50_000, verbose=0):
         super().__init__(verbose)
@@ -111,19 +92,12 @@ class TerminationReasonCallback(BaseCallback):
 
 
 if __name__ == "__main__":
-    N_ENVS = 12  # one process per env
+    N_ENVS = 12
     TOTAL_TIMESTEPS = 5_000_000
-    CHASE_CURRICULUM_END_STEP = int(TOTAL_TIMESTEPS * 0.7)  # full difficulty by 70% through
+    CHASE_CURRICULUM_END_STEP = int(TOTAL_TIMESTEPS * 0.7)
 
-    # Training envs start at chase_probability=0 (pure wander); the eval env
-    # below stays at the CHASE_PROBABILITY default so EvalCallback measures
-    # real target-difficulty performance throughout, not a moving target.
+    # Training starts with no chasing; eval env uses full difficulty
     env = SubprocVecEnv([make_env(chase_probability=0.0) for _ in range(N_ENVS)])
-
-    policy_kwargs = dict(
-        lstm_hidden_size=128,
-        net_arch=dict(pi=[64, 64], vf=[64, 64]),
-    )
 
     model = RecurrentPPO(
         "MlpLstmPolicy",
@@ -133,47 +107,44 @@ if __name__ == "__main__":
         n_epochs=10,
         learning_rate=3e-4,
         gamma=0.99,
-        ent_coef=0.001,  # keeps exploration alive without causing std runaway
-        policy_kwargs=policy_kwargs,
+        ent_coef=0.001,
+        policy_kwargs=dict(
+            lstm_hidden_size=128,
+            net_arch=dict(pi=[64, 64], vf=[64, 64]),
+        ),
         verbose=1,
         tensorboard_log="./tb_logs/",
-        device="cpu",  # benchmarked faster than cuda for this small a policy
+        device="cpu",  # faster than cuda for this small policy
     )
 
-    # save_freq/eval_freq count rollout steps, not env timesteps, so divide
-    # by N_ENVS to land checkpoints/evals every ~50k real timesteps.
+    # Frequencies are per vec-env step, so ~50k timesteps
     checkpoint_callback = CheckpointCallback(
         save_freq=max(50_000 // N_ENVS, 1),
         save_path="./checkpoints/",
         name_prefix=OUTPUT_MODEL,
     )
 
-    # Tracks the best-scoring checkpoint independently of whatever the run
-    # happens to end on, since PPO isn't monotonic. deterministic=False
-    # since this policy's sampled actions score better than its mean action.
-    eval_env = DummyVecEnv([make_env()])
     eval_callback = EvalCallback(
-        eval_env,
+        DummyVecEnv([make_env()]),
         best_model_save_path=f"./checkpoints/best_model_{OUTPUT_MODEL}/",
         log_path=f"./eval_logs_{OUTPUT_MODEL}/",
         eval_freq=max(50_000 // N_ENVS, 1),
         n_eval_episodes=10,
-        deterministic=False,
+        deterministic=False,  # sampled actions outperform the mean action
     )
 
     model.learn(
         total_timesteps=TOTAL_TIMESTEPS,
         callback=CallbackList([
-            ProgressPrintCallback(print_freq=100_000),
-            TerminationReasonCallback(report_freq=50_000),
+            ProgressPrintCallback(),
+            TerminationReasonCallback(),
             ChaseCurriculumCallback(end_step=CHASE_CURRICULUM_END_STEP),
             checkpoint_callback,
             eval_callback,
         ]),
         tb_log_name="v4.0",
     )
-    # SB3's save() misreads a dotted name's trailing ".N" as an existing
-    # extension, so ".zip" must be passed explicitly.
+    # Explicit .zip: SB3 treats a dotted name's ".0" as an extension
     model.save(f"{OUTPUT_MODEL}.zip")
 
     print(f"Training complete. Model saved to {OUTPUT_MODEL}.zip")
