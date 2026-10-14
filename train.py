@@ -1,5 +1,3 @@
-"""Fresh-start RecurrentPPO training. Usage: python train.py"""
-
 import torch
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import (

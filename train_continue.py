@@ -1,5 +1,3 @@
-"""Continue training SOURCE_MODEL into OUTPUT_MODEL. Usage: python train_continue.py"""
-
 import torch
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import (

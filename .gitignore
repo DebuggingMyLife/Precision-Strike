@@ -1,23 +1,14 @@
-# Virtual environments
 .venv/
 venv/
 env/
-
-# Python
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
-
-# Ultralytics
 yolo*.pt
 *.onnx
-
-# Trained models and checkpoints
 *.zip
 checkpoints/
-
-# OS / editor
 .DS_Store
 Thumbs.db
 .vscode/

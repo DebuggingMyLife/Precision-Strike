@@ -1,5 +1,3 @@
-"""Evaluate a model headlessly. Usage: python eval_model.py <model_path> [n_episodes]"""
-
 import sys
 from collections import Counter
 

@@ -1,5 +1,3 @@
-"""Watch a model fly in the GUI (latest .zip by default). Usage: python watch.py [model_path]"""
-
 import glob
 import os
 import sys

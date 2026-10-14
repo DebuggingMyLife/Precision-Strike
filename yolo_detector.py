@@ -1,5 +1,3 @@
-"""YOLO wrapper: detector(rgb) -> list of (x1, y1, x2, y2, conf, cls)."""
-
 from ultralytics import YOLO
 
 DEFAULT_WEIGHTS = "runs/detect/defender_yolo/weights/best.pt"
