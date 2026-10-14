@@ -106,9 +106,6 @@ class DroneSoccerEnv(gym.Env):
             low=-1.0, high=1.0, shape=(4,), dtype=np.float32
         )
 
-        self.drone_id = None
-        self.opponent_id = None
-        self.step_count = 0
         self.max_steps = 1000
 
     def set_chase_probability(self, p):
@@ -122,9 +119,6 @@ class DroneSoccerEnv(gym.Env):
             physicsClientId=self._client,
         )
 
-    # ------------------------------------------------------------------ #
-    # Gymnasium API
-    # ------------------------------------------------------------------ #
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         p.resetSimulation(physicsClientId=self._client)
@@ -186,9 +180,6 @@ class DroneSoccerEnv(gym.Env):
         )
         time.sleep(pause)
 
-    # ------------------------------------------------------------------ #
-    # Scene / action / reward
-    # ------------------------------------------------------------------ #
     def _load_scene(self):
         start_pos = [FIELD_X_MIN + 0.1, 0, GOAL_Z]
         self.drone_id = p.loadURDF(
@@ -207,7 +198,7 @@ class DroneSoccerEnv(gym.Env):
 
         self.goal_pos = [FIELD_X_MAX, 0, GOAL_Z]
         self.goal_radius = GOAL_OPENING_RADIUS
-        self.goal_ids = self._create_hoop(
+        self._create_hoop(
             self.goal_pos, radius=GOAL_RING_RADIUS, tube_radius=GOAL_TUBE_RADIUS
         )
 
@@ -232,8 +223,8 @@ class DroneSoccerEnv(gym.Env):
             self.np_random.uniform(*_DEFENDER_Z_RANGE),
         ], dtype=np.float64)
 
-    def _create_hoop(self, center, radius=0.5, tube_radius=0.03, segments=16,
-                      rgba=(1, 0, 0, 1)):
+    def _create_hoop(self, center, radius, tube_radius, segments=16,
+                     rgba=(1, 0, 0, 1)):
         seg_length = 2 * np.pi * radius / segments
         collision_shape = p.createCollisionShape(
             p.GEOM_CAPSULE, radius=tube_radius, height=seg_length,
@@ -244,7 +235,6 @@ class DroneSoccerEnv(gym.Env):
             rgbaColor=list(rgba), physicsClientId=self._client,
         )
 
-        segment_ids = []
         for i in range(segments):
             angle = 2 * np.pi * i / segments
             position = [
@@ -253,7 +243,7 @@ class DroneSoccerEnv(gym.Env):
                 center[2] + radius * np.sin(angle),
             ]
             orientation = p.getQuaternionFromEuler([angle, 0, 0])
-            body_id = p.createMultiBody(
+            p.createMultiBody(
                 baseMass=0,
                 baseCollisionShapeIndex=collision_shape,
                 baseVisualShapeIndex=visual_shape,
@@ -261,8 +251,6 @@ class DroneSoccerEnv(gym.Env):
                 baseOrientation=orientation,
                 physicsClientId=self._client,
             )
-            segment_ids.append(body_id)
-        return segment_ids
 
     def _update_defender(self):
         if self._defender_chasing:
@@ -405,9 +393,6 @@ class DroneSoccerEnv(gym.Env):
 
         return None
 
-    # ------------------------------------------------------------------ #
-    # Observation
-    # ------------------------------------------------------------------ #
     def _get_obs(self):
         drone_state = self._get_drone_state()
         det_features = self._get_detection_features()
@@ -429,7 +414,7 @@ class DroneSoccerEnv(gym.Env):
         if not detections:
             self._last_detection = np.array([0.0, 0.0, 0.0, -1.0], dtype=np.float32)
         else:
-            x1, y1, x2, y2, conf, cls = detections[0]
+            x1, y1, x2, y2 = detections[0][:4]
             cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
             distance = self._depth_to_distance(depth[cy, cx])
             rel_x = (cx / self.img_size) * 2 - 1
@@ -464,11 +449,10 @@ class DroneSoccerEnv(gym.Env):
 
 if __name__ == "__main__":
     env = DroneSoccerEnv(detector=lambda rgb: [], render_mode="human")
-    obs, info = env.reset()
+    obs, _ = env.reset()
     print("Initial obs:", obs)
     for _ in range(150):
-        action = env.action_space.sample()
-        obs, reward, terminated, truncated, info = env.step(action)
+        obs, reward, *_ = env.step(env.action_space.sample())
         print(f"reward={reward:.3f} obs={obs}")
         time.sleep(1 / 60)
     env.close()

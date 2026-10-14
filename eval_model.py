@@ -1,14 +1,4 @@
-"""
-Matched evaluation: loads a model, runs N headless episodes with
-deterministic=False (see PROGRESS.md — this policy's mean action
-underperforms its sampled distribution, same reason EvalCallback and
-watch.py both use deterministic=False), and tallies termination_reason.
-
-Run:
-    python eval_model.py <model_path> [n_episodes]
-
-Or import evaluate() directly for use in other scripts.
-"""
+"""Evaluate a model headlessly. Usage: python eval_model.py <model_path> [n_episodes]"""
 
 import sys
 from collections import Counter
@@ -25,15 +15,16 @@ def evaluate(model_path, n_episodes=150, seed=0):
 
     reasons = Counter()
     for ep in range(n_episodes):
-        obs, info = env.reset(seed=seed + ep)
+        obs, _ = env.reset(seed=seed + ep)
         lstm_states = None
         episode_start = True
         for _ in range(1000):
+            # Sampled actions outperform the mean action for this policy
             action, lstm_states = model.predict(
                 obs, state=lstm_states, episode_start=episode_start,
                 deterministic=False,
             )
-            obs, reward, terminated, truncated, info = env.step(action)
+            obs, _, terminated, truncated, info = env.step(action)
             episode_start = terminated or truncated
             if episode_start:
                 reasons[info.get("termination_reason")] += 1
@@ -42,8 +33,7 @@ def evaluate(model_path, n_episodes=150, seed=0):
 
     total = sum(reasons.values())
     scored = reasons.get("scored", 0)
-    missed = reasons.get("missed_goal", 0)
-    shots = scored + missed
+    shots = scored + reasons.get("missed_goal", 0)
     return {
         "model_path": model_path,
         "n_episodes": total,
@@ -73,5 +63,4 @@ if __name__ == "__main__":
     path = sys.argv[1]
     n_eps = int(sys.argv[2]) if len(sys.argv) > 2 else 150
     print(f"Evaluating {path} over {n_eps} episodes...")
-    result = evaluate(path, n_episodes=n_eps)
-    print(format_result(result))
+    print(format_result(evaluate(path, n_episodes=n_eps)))
