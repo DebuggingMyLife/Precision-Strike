@@ -11,11 +11,19 @@ import pybullet_data
 import gymnasium as gym
 from gymnasium import spaces
 
+# References:
+# - Gymnasium custom env: https://gymnasium.farama.org/introduction/create_custom_env/
+# - PyBullet Quickstart Guide: https://docs.google.com/document/d/10sXEhzFRSnvFcl3XxNGhnD4N2SedqwdAvK3dsihxVUA
+# - gym-pybullet-drones (Panerati et al., 2021): https://github.com/utiasDSL/gym-pybullet-drones
+#   paper: https://arxiv.org/abs/2103.02142
+
 # Paths
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 DRONE_URDF = os.path.join(ASSETS_DIR, "cf2x.urdf")
 
 # Drone Physics
+# KF, KM, base mass and inertia from gym-pybullet-drones cf2x.urdf:
+# https://github.com/utiasDSL/gym-pybullet-drones/blob/main/gym_pybullet_drones/assets/cf2x.urdf
 DRONE_MASS = 0.100
 DRONE_KF = 3.16e-10
 DRONE_KM = 7.94e-12
@@ -33,6 +41,8 @@ _CF2X_BASE_INERTIA = (1.4e-5, 1.4e-5, 2.17e-5)
 _INERTIA_SCALE = DRONE_MASS / _CF2X_BASE_MASS
 DRONE_INERTIA = tuple(i * _INERTIA_SCALE for i in _CF2X_BASE_INERTIA)
 
+# Hover/max RPM formulas follow BaseAviary.__init__:
+# https://github.com/utiasDSL/gym-pybullet-drones/blob/main/gym_pybullet_drones/envs/BaseAviary.py
 _GRAVITY_FORCE = GRAVITY_ACCEL * DRONE_MASS
 HOVER_RPM = (_GRAVITY_FORCE / (4 * DRONE_KF)) ** 0.5
 MAX_RPM = (DRONE_THRUST2WEIGHT * _GRAVITY_FORCE / (4 * DRONE_KF)) ** 0.5
@@ -283,6 +293,10 @@ class DroneSoccerEnv(gym.Env):
             physicsClientId=self._client,
         )
 
+    # Motor mixing adapted from DSLPIDControl.MIXER_MATRIX (signs differ):
+    # https://github.com/utiasDSL/gym-pybullet-drones/blob/main/gym_pybullet_drones/control/DSLPIDControl.py
+    # Force/torque application follows BaseAviary._physics, with the yaw torque sign reversed:
+    # https://github.com/utiasDSL/gym-pybullet-drones/blob/main/gym_pybullet_drones/envs/BaseAviary.py
     def _apply_action(self, action):
         act_roll, act_pitch, act_throttle, act_yaw = np.clip(action, -1.0, 1.0)
 
@@ -422,6 +436,8 @@ class DroneSoccerEnv(gym.Env):
             self._last_detection = np.array([1.0, rel_x, rel_y, distance], dtype=np.float32)
         return self._last_detection
 
+    # Onboard camera follows BaseAviary._getDroneImages:
+    # https://github.com/utiasDSL/gym-pybullet-drones/blob/main/gym_pybullet_drones/envs/BaseAviary.py
     def _render_camera(self):
         drone_pos, drone_orn = p.getBasePositionAndOrientation(
             self.drone_id, physicsClientId=self._client
@@ -442,6 +458,9 @@ class DroneSoccerEnv(gym.Env):
         depth = np.reshape(depth_raw, (self.img_size, self.img_size))
         return rgb, depth
 
+    # Depth buffer linearisation from the bullet3 example:
+    # https://github.com/bulletphysics/bullet3/blob/master/examples/pybullet/examples/pointCloudFromCameraImage.py
+    # Derivation: https://pyb-utils.readthedocs.io/en/latest/_modules/pyb_utils/camera.html
     @staticmethod
     def _depth_to_distance(depth_buffer_value, near=0.05, far=20):
         return far * near / (far - (far - near) * depth_buffer_value)
