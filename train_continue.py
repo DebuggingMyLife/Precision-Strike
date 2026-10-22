@@ -13,9 +13,9 @@ torch.set_float32_matmul_precision("high")
 torch.set_num_threads(1)
 
 # Update both names before each new stage to avoid overwriting runs
-SOURCE_MODEL = "drone_soccer_ppo_v4.0"
-OUTPUT_MODEL = "drone_soccer_ppo_v4.1"
-ADDITIONAL_TIMESTEPS = 2_000_000
+SOURCE_MODEL = "drone_soccer_ppo_v4.1"
+OUTPUT_MODEL = "drone_soccer_ppo_v4.2"
+ADDITIONAL_TIMESTEPS = 5_000_000
 
 
 if __name__ == "__main__":

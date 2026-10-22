@@ -14,7 +14,7 @@ from drone_soccer_env import CHASE_PROBABILITY, DroneSoccerEnv
 OUTPUT_MODEL = "drone_soccer_ppo_v4.0"
 
 torch.set_float32_matmul_precision("high")
-torch.set_num_threads(1) 
+torch.set_num_threads(1)
 
 
 def make_env(chase_probability=CHASE_PROBABILITY):
@@ -24,7 +24,6 @@ def make_env(chase_probability=CHASE_PROBABILITY):
         return Monitor(env)
     return _init
 
-
 class ChaseCurriculumCallback(BaseCallback):
     """Ramps chase_probability linearly from 0 to end_prob by end_step."""
 
@@ -33,7 +32,7 @@ class ChaseCurriculumCallback(BaseCallback):
         self.end_step = end_step
         self.end_prob = end_prob
         self.update_freq = update_freq
-        self._last_update = -update_freq  # update on first call
+        self._last_update = -update_freq
 
     def _on_step(self):
         if self.num_timesteps - self._last_update >= self.update_freq:
@@ -96,6 +95,7 @@ if __name__ == "__main__":
 
     env = SubprocVecEnv([make_env(chase_probability=0.0) for _ in range(N_ENVS)])
 
+    #RecurrentPPO 
     model = RecurrentPPO(
         "MlpLstmPolicy",
         env,
@@ -126,7 +126,7 @@ if __name__ == "__main__":
         log_path=f"./eval_logs_{OUTPUT_MODEL}/",
         eval_freq=max(50_000 // N_ENVS, 1),
         n_eval_episodes=10,
-        deterministic=False,  # sampled actions outperform the mean action
+        deterministic=False,
     )
 
     model.learn(

@@ -8,6 +8,9 @@ __pycache__/
 yolo*.pt
 *.onnx
 *.zip
+!drone_soccer_ppo_v4.1.zip
+!drone_soccer_plainppo_v1.0.zip
+!drone_soccer_plainppo_v1.0_best.zip
 checkpoints/
 .DS_Store
 Thumbs.db

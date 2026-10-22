@@ -12,7 +12,9 @@ from yolo_detector import YoloDetector
 def find_latest_model():
     if len(sys.argv) > 1:
         return sys.argv[1]
-    candidates = glob.glob("checkpoints/*.zip") + glob.glob("drone_soccer_ppo_v*.zip")
+    # RecurrentPPO only: plainppo models won't load here (use watch_ppo.py for those)
+    candidates = (glob.glob("checkpoints/drone_soccer_ppo_*.zip")
+                  + glob.glob("drone_soccer_ppo_v*.zip"))
     if not candidates:
         raise FileNotFoundError("No model .zip found. Train first.")
     return max(candidates, key=os.path.getmtime)

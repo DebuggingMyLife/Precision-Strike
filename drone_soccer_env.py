@@ -85,6 +85,9 @@ DEFENDER_SPAWN_POS = (FIELD_X_MAX - 0.3, 0.0, GOAL_Z)
 _DEFENDER_X_RANGE = (FIELD_X_MIN + 0.3, FIELD_X_MAX - 0.3)
 _DEFENDER_Y_RANGE = (-(FIELD_Y_HALF - 0.2), FIELD_Y_HALF - 0.2)
 _DEFENDER_Z_RANGE = (GOAL_Z - 0.3, GOAL_Z + 0.3)
+# Used only when randomize_defender_spawn=True (the plain PPO run); kept to
+# the defender's own half so it never starts on top of the striker
+_DEFENDER_SPAWN_X_RANGE = (FIELD_X_MAX / 2, FIELD_X_MAX - 0.3)
 
 
 class DroneSoccerEnv(gym.Env):
@@ -93,7 +96,8 @@ class DroneSoccerEnv(gym.Env):
 
     def __init__(self, detector, render_mode=None, img_size=160,
                  chase_probability=CHASE_PROBABILITY,
-                 opponent_speed_mps=OPPONENT_SPEED_MPS):
+                 opponent_speed_mps=OPPONENT_SPEED_MPS,
+                 randomize_defender_spawn=False):
         super().__init__()
         if detector is None:
             raise ValueError("detector is required")
@@ -102,6 +106,7 @@ class DroneSoccerEnv(gym.Env):
         self.detector = detector
         self.chase_probability = chase_probability
         self.opponent_speed = opponent_speed_mps / PHYSICS_HZ
+        self.randomize_defender_spawn = randomize_defender_spawn
 
         self._client = p.connect(p.GUI if render_mode == "human" else p.DIRECT)
         p.setAdditionalSearchPath(
@@ -213,10 +218,17 @@ class DroneSoccerEnv(gym.Env):
         )
 
         self._defender_chasing = self.np_random.random() < self.chase_probability
-        self._defender_pos = np.array(DEFENDER_SPAWN_POS, dtype=np.float64)
+        if self.randomize_defender_spawn:
+            self._defender_pos = np.array([
+                self.np_random.uniform(*_DEFENDER_SPAWN_X_RANGE),
+                self.np_random.uniform(*_DEFENDER_Y_RANGE),
+                self.np_random.uniform(*_DEFENDER_Z_RANGE),
+            ], dtype=np.float64)
+        else:
+            self._defender_pos = np.array(DEFENDER_SPAWN_POS, dtype=np.float64)
         self._defender_target = self._defender_waypoint()
         self.opponent_id = p.loadURDF(
-            DRONE_URDF, DEFENDER_SPAWN_POS, physicsClientId=self._client
+            DRONE_URDF, self._defender_pos.tolist(), physicsClientId=self._client
         )
         p.changeDynamics(
             self.opponent_id, linkIndex=-1,
