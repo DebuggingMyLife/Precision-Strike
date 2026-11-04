@@ -13,7 +13,6 @@ from yolo_detector import YoloDetector
 def find_latest_model():
     if len(sys.argv) > 1:
         return sys.argv[1]
-    # plainppo only: RecurrentPPO models won't load with PPO (use watch.py for those)
     candidates = (glob.glob("checkpoints/drone_soccer_plainppo_*.zip")
                   + glob.glob("drone_soccer_plainppo_v*.zip"))
     if not candidates:

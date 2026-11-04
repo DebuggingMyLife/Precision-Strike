@@ -13,7 +13,6 @@ from train_ppo import make_env
 torch.set_float32_matmul_precision("high")
 torch.set_num_threads(1)
 
-# Update both names before each new stage to avoid overwriting runs
 SOURCE_MODEL = "drone_soccer_plainppo_v1.0"
 OUTPUT_MODEL = "drone_soccer_plainppo_v1.1"
 ADDITIONAL_TIMESTEPS = 2_000_000
@@ -21,7 +20,6 @@ ADDITIONAL_TIMESTEPS = 2_000_000
 
 if __name__ == "__main__":
     N_ENVS = 12
-    # Full "plainppo_vX.Y" name so log paths can't collide with the RecurrentPPO lineage's
     version = OUTPUT_MODEL.removeprefix("drone_soccer_")
 
     env = SubprocVecEnv([make_env() for _ in range(N_ENVS)])

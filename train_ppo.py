@@ -37,7 +37,7 @@ def make_env(chase_probability=CHASE_PROBABILITY):
 
 if __name__ == "__main__":
     N_ENVS = 12
-    TOTAL_TIMESTEPS = 12_000_000
+    TOTAL_TIMESTEPS = 7_000_000
     CHASE_CURRICULUM_END_STEP = 3_500_000
 
     env = SubprocVecEnv([make_env(chase_probability=0.0) for _ in range(N_ENVS)])

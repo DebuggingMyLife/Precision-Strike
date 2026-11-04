@@ -85,8 +85,6 @@ DEFENDER_SPAWN_POS = (FIELD_X_MAX - 0.3, 0.0, GOAL_Z)
 _DEFENDER_X_RANGE = (FIELD_X_MIN + 0.3, FIELD_X_MAX - 0.3)
 _DEFENDER_Y_RANGE = (-(FIELD_Y_HALF - 0.2), FIELD_Y_HALF - 0.2)
 _DEFENDER_Z_RANGE = (GOAL_Z - 0.3, GOAL_Z + 0.3)
-# Used only when randomize_defender_spawn=True (the plain PPO run); kept to
-# the defender's own half so it never starts on top of the striker
 _DEFENDER_SPAWN_X_RANGE = (FIELD_X_MAX / 2, FIELD_X_MAX - 0.3)
 
 
