@@ -1,3 +1,10 @@
+"""
+Some references used
+
+Tello SDK: https://www.sekidorc.com/pdf/Tello_SDK2.0_UserGuide_en_v1.0_181101.pdf
+DJITelloPy: https://github.com/damiafuentes/DJITelloPy
+Ultralytics YOLO Python API: https://docs.ultralytics.com/usage/python
+"""
 from __future__ import annotations
 
 import argparse
